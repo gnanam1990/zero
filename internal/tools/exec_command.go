@@ -102,13 +102,23 @@ func (manager *execSessionManager) remove(id int) {
 	delete(manager.sessions, id)
 }
 
-func (manager *execSessionManager) removeCompletedLater(session *execSession) {
-	retention := manager.completedRetention
+func (manager *execSessionManager) removeCompletedLater(session *execSession, parentCtx context.Context) {
 	go func() {
-		<-session.done
-		if retention > 0 {
+		// A cancelled run must not leave a stale "running" terminal in the
+		// registry: drop the session promptly when the parent run context is
+		// cancelled. Otherwise wait for the process to exit and honour the
+		// normal completion retention so naturally-finished sessions stay
+		// listable for a short window.
+		select {
+		case <-session.done:
+		case <-parentCtx.Done():
+		}
+		if retention := manager.completedRetention; retention > 0 && !session.doneClosed() {
 			timer := time.NewTimer(retention)
-			<-timer.C
+			select {
+			case <-session.done:
+			case <-timer.C:
+			}
 		}
 		manager.remove(session.id)
 	}()
@@ -533,7 +543,7 @@ func (tool execCommandTool) run(ctx context.Context, args map[string]any, engine
 		return errorResult("Error running exec_command: " + err.Error())
 	}
 
-	session, err := tool.startSession(commandText, absoluteCwd, relativeCwd, ttyRequested, engine, sandboxPermissions)
+	session, err := tool.startSession(ctx, commandText, absoluteCwd, relativeCwd, ttyRequested, engine, sandboxPermissions)
 	if err != nil {
 		return errorResult("Error starting exec_command: " + err.Error())
 	}
@@ -562,9 +572,16 @@ func (tool execCommandTool) run(ctx context.Context, args map[string]any, engine
 	})
 }
 
-func (tool execCommandTool) startSession(commandText string, absoluteCwd string, relativeCwd string, ttyRequested bool, engine *zeroSandbox.Engine, sandboxPermissions SandboxPermissionOverride) (*execSession, error) {
+func (tool execCommandTool) startSession(ctx context.Context, commandText string, absoluteCwd string, relativeCwd string, ttyRequested bool, engine *zeroSandbox.Engine, sandboxPermissions SandboxPermissionOverride) (*execSession, error) {
 	id := tool.manager.allocateID()
-	commandCtx, cancel := context.WithCancel(context.Background())
+	// Derive the child's context from the active run context so a cancelled run
+	// propagates to the subprocess and process group. A nil ctx falls back to
+	// Background to preserve the prior no-context callers' behaviour.
+	parentCtx := ctx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	commandCtx, cancel := context.WithCancel(parentCtx)
 	commandEngine := commandEngineForSandboxPermissions(engine, sandboxPermissions)
 	command, plan, err := buildBashCommand(commandCtx, commandText, absoluteCwd, commandEngine)
 	if err != nil {
@@ -572,7 +589,7 @@ func (tool execCommandTool) startSession(commandText string, absoluteCwd string,
 		return nil, err
 	}
 	output := newExecOutputBuffer()
-	monitor := zeroSandbox.StartDenialMonitor(context.Background(), plan.MonitorTag)
+	monitor := zeroSandbox.StartDenialMonitor(parentCtx, plan.MonitorTag)
 	stdin, tty, cleanup, err := startExecProcess(command, output, ttyRequested)
 	if err != nil {
 		_ = monitor.Stop()
@@ -597,7 +614,7 @@ func (tool execCommandTool) startSession(commandText string, absoluteCwd string,
 		done:        make(chan struct{}),
 	}
 	tool.manager.store(session)
-	tool.manager.removeCompletedLater(session)
+	tool.manager.removeCompletedLater(session, parentCtx)
 	go func() {
 		err := command.Wait()
 		if blocks := monitor.Stop(); len(blocks) > 0 {
