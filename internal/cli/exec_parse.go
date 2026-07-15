@@ -235,6 +235,112 @@ func parseExecArgs(args []string) (execOptions, bool, error) {
 				return options, false, err
 			}
 			options.outputFormat = format
+		case arg == "--orchestration-preview":
+			options.orchestrationPreview = true
+		case arg == "--orchestrated-once":
+			options.orchestratedOnce = true
+		case arg == "--orchestrated":
+			options.orchestrated = true
+		case arg == "--debug-orchestrated-tools":
+			options.debugOrchestratedTools = true
+		case arg == "--orchestrated-metrics":
+			options.orchestratedMetrics = true
+		case arg == "--metrics-json":
+			value, next, err := nextFlagValue(args, index, arg)
+			if err != nil {
+				return options, false, err
+			}
+			options.metricsJSON = strings.TrimSpace(value)
+			index = next
+		case strings.HasPrefix(arg, "--metrics-json="):
+			options.metricsJSON = strings.TrimSpace(strings.TrimPrefix(arg, "--metrics-json="))
+		case arg == "--parallel-readonly":
+			options.parallelReadonly = true
+		case arg == "--parallel-workers":
+			value, next, err := nextFlagValue(args, index, arg)
+			if err != nil {
+				return options, false, err
+			}
+			n, perr := strconv.Atoi(strings.TrimSpace(value))
+			if perr != nil || n < 1 || n > 8 {
+				return options, false, execUsageError{fmt.Sprintf("invalid --parallel-workers %q. Expected an integer between 1 and 8.", value)}
+			}
+			options.parallelWorkers = n
+			index = next
+		case strings.HasPrefix(arg, "--parallel-workers="):
+			raw := strings.TrimSpace(strings.TrimPrefix(arg, "--parallel-workers="))
+			n, perr := strconv.Atoi(raw)
+			if perr != nil || n < 1 || n > 8 {
+				return options, false, execUsageError{fmt.Sprintf("invalid --parallel-workers %q. Expected an integer between 1 and 8.", raw)}
+			}
+			options.parallelWorkers = n
+		case arg == "--show-rejected":
+			options.showRejected = true
+		case arg == "--json":
+			options.orchestrationPreviewJSON = true
+		case arg == "--provider":
+			value, next, err := nextFlagValue(args, index, arg)
+			if err != nil {
+				return options, false, err
+			}
+			options.routerProvider = strings.TrimSpace(value)
+			index = next
+		case strings.HasPrefix(arg, "--provider="):
+			options.routerProvider = strings.TrimSpace(strings.TrimPrefix(arg, "--provider="))
+		case arg == "--allow-provider":
+			value, next, err := nextFlagValue(args, index, arg)
+			if err != nil {
+				return options, false, err
+			}
+			options.allowProviders = append(options.allowProviders, strings.TrimSpace(value))
+			index = next
+		case strings.HasPrefix(arg, "--allow-provider="):
+			options.allowProviders = append(options.allowProviders, strings.TrimSpace(strings.TrimPrefix(arg, "--allow-provider=")))
+		case arg == "--deny-model":
+			value, next, err := nextFlagValue(args, index, arg)
+			if err != nil {
+				return options, false, err
+			}
+			options.denyModels = append(options.denyModels, strings.TrimSpace(value))
+			index = next
+		case strings.HasPrefix(arg, "--deny-model="):
+			options.denyModels = append(options.denyModels, strings.TrimSpace(strings.TrimPrefix(arg, "--deny-model=")))
+		case arg == "--require-known-price":
+			options.requireKnownPrice = true
+		case arg == "--max-input-cost":
+			value, next, err := nextFlagValue(args, index, arg)
+			if err != nil {
+				return options, false, err
+			}
+			f, perr := parseInlineFloat(strings.TrimSpace(value), "--max-input-cost")
+			if perr != nil {
+				return options, false, perr
+			}
+			options.maxInputCost = f
+			index = next
+		case strings.HasPrefix(arg, "--max-input-cost="):
+			f, perr := parseInlineFloat(strings.TrimSpace(strings.TrimPrefix(arg, "--max-input-cost=")), "--max-input-cost")
+			if perr != nil {
+				return options, false, perr
+			}
+			options.maxInputCost = f
+		case arg == "--max-output-cost":
+			value, next, err := nextFlagValue(args, index, arg)
+			if err != nil {
+				return options, false, err
+			}
+			f, perr := parseInlineFloat(strings.TrimSpace(value), "--max-output-cost")
+			if perr != nil {
+				return options, false, perr
+			}
+			options.maxOutputCost = f
+			index = next
+		case strings.HasPrefix(arg, "--max-output-cost="):
+			f, perr := parseInlineFloat(strings.TrimSpace(strings.TrimPrefix(arg, "--max-output-cost=")), "--max-output-cost")
+			if perr != nil {
+				return options, false, perr
+			}
+			options.maxOutputCost = f
 		case arg == "-p" || arg == "--prompt":
 			value, next, err := nextFlagValue(args, index, arg)
 			if err != nil {
@@ -423,6 +529,80 @@ func parseExecArgs(args []string) (execOptions, bool, error) {
 	}
 	if options.worktreeDir != "" && !options.worktree {
 		return options, false, execUsageError{"--worktree-dir requires --worktree."}
+	}
+	if options.orchestratedOnce {
+		// The orchestrated-once path executes exactly one task through the real
+		// runtime. It cannot be combined with the offline-only preview, nor with
+		// flags that imply a different session lifecycle or a full DAG run.
+		switch {
+		case options.orchestrationPreview,
+			options.listTools,
+			options.resume != "" || options.resumeLatest,
+			options.fork != "",
+			options.useSpec,
+			options.worktree,
+			options.parallelReadonly:
+			return options, false, execUsageError{"--orchestrated-once cannot be combined with --orchestration-preview, --list-tools, --resume, --fork, --use-spec, --worktree, or --parallel-readonly."}
+		}
+	}
+	if options.orchestrated {
+		switch {
+		case options.orchestrationPreview,
+			options.listTools,
+			options.resume != "" || options.resumeLatest,
+			options.fork != "",
+			options.useSpec,
+			options.worktree,
+			options.orchestratedOnce:
+			return options, false, execUsageError{"--orchestrated cannot be combined with --orchestration-preview, --list-tools, --resume, --fork, --use-spec, --worktree, or --orchestrated-once."}
+		}
+	}
+	if options.parallelReadonly && !options.orchestrated {
+		return options, false, execUsageError{"--parallel-readonly requires --orchestrated (full DAG)."}
+	}
+	if options.parallelWorkers != 0 && !options.parallelReadonly {
+		return options, false, execUsageError{"--parallel-workers requires --parallel-readonly."}
+	}
+	if options.parallelReadonly && options.parallelWorkers == 0 {
+		options.parallelWorkers = 2
+	}
+	if options.orchestratedMetrics || options.metricsJSON != "" {
+		if !options.orchestrated && !options.orchestratedOnce {
+			return options, false, execUsageError{"--orchestrated-metrics and --metrics-json require --orchestrated or --orchestrated-once."}
+		}
+	}
+	if options.orchestrationPreview {
+		// The preview renders the dry-run pipeline and returns before any
+		// provider, session, or tool is created, so it cannot combine with flags
+		// that imply a real execution or session lifecycle.
+		switch {
+		case options.skipPermissionsUnsafe,
+			options.allowEscalation,
+			options.selfCorrect,
+			options.worktree,
+			options.useSpec,
+			options.listTools,
+			options.resume != "" || options.resumeLatest,
+			options.fork != "",
+			options.noCompletionGate:
+			return options, false, execUsageError{"--orchestration-preview cannot be combined with execution flags (--skip-permissions-unsafe, --allow-escalation, --self-correct, --worktree, --use-spec, --list-tools, --resume, --fork, --no-completion-gate)."}
+		}
+	} else if !options.orchestratedOnce && !options.orchestrated {
+		// Router preview flags are only meaningful for the dry-run preview or the
+		// orchestrated-once run; outside those they would be silently ignored, so
+		// reject them rather than no-op.
+		switch {
+		case options.routerProvider != "",
+			len(options.allowProviders) > 0,
+			len(options.denyModels) > 0,
+			options.requireKnownPrice,
+			options.maxInputCost != 0,
+			options.maxOutputCost != 0:
+			return options, false, execUsageError{"Router flags (--provider, --allow-provider, --deny-model, --require-known-price, --max-input-cost, --max-output-cost) require --orchestration-preview or --orchestrated-once."}
+		}
+		if options.showRejected || options.orchestrationPreviewJSON {
+			return options, false, execUsageError{"--show-rejected and --json require --orchestration-preview."}
+		}
 	}
 	if options.initSessionID != "" && !sessions.ValidSessionID(options.initSessionID) {
 		return options, false, execUsageError{fmt.Sprintf("invalid --init-session-id %q", options.initSessionID)}

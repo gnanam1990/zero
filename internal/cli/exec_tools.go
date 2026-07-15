@@ -140,7 +140,7 @@ func visibleExecTools(registry *tools.Registry, options execOptions, permissionM
 	all := registry.All()
 	visible := []tools.Tool{}
 	for _, tool := range all {
-		if !agent.ToolVisible(tool, permissionMode, options.enabledTools, options.disabledTools) {
+		if !agent.ToolVisible(tool, permissionMode, options.enabledTools, options.disabledTools, agent.ToolExposureDefault) {
 			continue
 		}
 		visible = append(visible, tool)

@@ -124,6 +124,54 @@ type execOptions struct {
 	// additional write roots for this run. Unioned with
 	// config.SandboxConfig.AdditionalWriteRoots at scope construction time.
 	addDirs []string
+	// orchestrationPreview opts the run into the offline dry-run preview: the full
+	// classify→plan→schedule→route pipeline renders and the run returns before any
+	// provider, session, or tool is created. Off by default — a run without the
+	// flag is byte-identical to before.
+	orchestrationPreview bool
+	// orchestrationPreviewJSON renders the preview as JSON (plan-preview shape +
+	// mode/executed metadata).
+	orchestrationPreviewJSON bool
+	// orchestratedOnce runs exactly ONE planned task end-to-end through the
+	// existing agent runtime (classify→plan→schedule→route→execute→verify→gate),
+	// then stops. It is the first real orchestrated execution path and is
+	// deliberately distinct from --orchestration-preview (offline) and the
+	// forbidden --orchestrated (full DAG). Off by default.
+	orchestratedOnce bool
+	// orchestrated runs the FULL planned DAG sequentially through the existing
+	// agent runtime (classify->plan->schedule->route->execute->verify->gate), one
+	// task at a time, stopping on the first failure or blocked task. Off by default.
+	orchestrated bool
+	// showRejected surfaces rejected-model details in the text preview.
+	showRejected bool
+	// parallelReadonly enables bounded concurrent execution of independent,
+	// read-only, ready tasks within the otherwise sequential orchestrated DAG.
+	// It is only meaningful with --orchestrated (full DAG); --orchestrated-once
+	// runs exactly one task and rejects this flag.
+	parallelReadonly bool
+	// parallelWorkers bounds the concurrency of a read-only parallel batch.
+	// Default 2, minimum 1, maximum 8. Only consulted when parallelReadonly.
+	parallelWorkers int
+	// routerProvider is a routing preference (--provider), distinct from the
+	// runtime model override carried by options.model.
+	routerProvider    string
+	allowProviders    []string
+	denyModels        []string
+	requireKnownPrice bool
+	maxInputCost      float64
+	maxOutputCost     float64
+	// debugOrchestratedTools, with --orchestrated-once, prints the resolved
+	// tool-resolution state (task kind, enabled/disabled overrides, registry tool
+	// names, deferred tool names, and the final provider-visible tool schemas)
+	// without calling any provider. Diagnostic only — no execution.
+	debugOrchestratedTools bool
+	// orchestratedMetrics enables native observability/benchmarking for an
+	// orchestrated run: per-task and per-batch timing, concurrency, provider
+	// token/tool usage, and effective speedup. It implies metric collection.
+	orchestratedMetrics bool
+	// metricsJSON, when set, additionally writes the full metrics object to
+	// this path as JSON after the run. Implies metric collection.
+	metricsJSON string
 }
 
 type execUsageError struct {
@@ -141,6 +189,51 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 	}
 	if help {
 		if err := writeExecHelp(stdout); err != nil {
+			return exitCrash
+		}
+		return exitSuccess
+	}
+
+	// Offline orchestration preview: render the classify→plan→schedule→route
+	// pipeline and return BEFORE any provider construction, session creation, or
+	// tool execution. This is the only branch that touches --orchestration-preview;
+	// a run without the flag is byte-identical to before (it skips straight past
+	// this block).
+	if options.orchestrationPreview {
+		workspaceRoot, werr := resolveWorkspaceRoot(options.cwd, deps)
+		if werr != nil {
+			return writeExecFormatUsageError(stdout, stderr, options.outputFormat, werr.Error())
+		}
+		prompt, _, perr := resolveExecPrompt(options, workspaceRoot, deps.stdin)
+		if perr != nil {
+			return writeExecFormatUsageError(stdout, stderr, options.outputFormat, perr.Error())
+		}
+		routerOpts := routerFlagOptions{
+			provider:          options.routerProvider,
+			model:             options.model,
+			allowProviders:    options.allowProviders,
+			denyModels:        options.denyModels,
+			requireKnownPrice: options.requireKnownPrice,
+		}
+		if options.maxInputCost != 0 {
+			v := options.maxInputCost
+			routerOpts.maxInputCost = &v
+		}
+		if options.maxOutputCost != 0 {
+			v := options.maxOutputCost
+			routerOpts.maxOutputCost = &v
+		}
+		result, berr := buildPlanPreview(prompt, routerOpts, detectRepositoryPresence(deps), nil)
+		if berr != nil {
+			return writeAppError(stderr, berr.Error(), exitCrash)
+		}
+		if options.orchestrationPreviewJSON {
+			if err := writePrettyJSON(stdout, buildOrchestrationPreviewJSON(result)); err != nil {
+				return exitCrash
+			}
+			return exitSuccess
+		}
+		if err := writeOrchestrationPreviewText(stdout, result, options.showRejected); err != nil {
 			return exitCrash
 		}
 		return exitSuccess
@@ -446,6 +539,73 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 		})
 	}
 
+	// Orchestrated-once: run exactly one planned task through the real runtime
+	// and stop. This branch reuses all the provider/config/tool wiring above, then
+	// hands off to the orchestration pipeline. A run WITHOUT this flag is
+	// byte-identical to before — it skips straight past this block into the
+	// normal session setup below.
+	var orchestratedMetrics *orchestratedRunMetrics
+	if options.orchestratedMetrics || options.metricsJSON != "" {
+		orchestratedMetrics = &orchestratedRunMetrics{}
+	}
+	if options.orchestratedOnce {
+		return runOrchestratedOnce(orchestratedOnceDeps{
+			options:                 options,
+			stdout:                  stdout,
+			stderr:                  stderr,
+			deps:                    deps,
+			workspaceRoot:           workspaceRoot,
+			trustRoot:               trustRoot,
+			registry:                registry,
+			modelRegistry:           modelRegistry,
+			resolved:                resolved,
+			modelSwitcher:           modelSwitcher,
+			forwardEffort:           forwardEffort,
+			images:                  images,
+			sandboxEngine:           sandboxEngine,
+			effectiveDeferThreshold: effectiveDeferThreshold,
+			specialistRuntime:       specialistRuntime,
+			pluginActivation:        pluginActivation,
+			permissionMode:          permissionMode,
+			sessionTitle:            sessionTitle,
+			prompt:                  prompt,
+			resolveRuntimeMetadata:  providers.ResolveRuntimeMetadata,
+			parallel:                parallelReadonlyOptions{Enabled: options.parallelReadonly, MaxWorkers: options.parallelWorkers},
+			metrics:                 orchestratedMetrics,
+			metricsJSONPath:         options.metricsJSON,
+		})
+	}
+
+	// Orchestrated: run the full planned DAG sequentially through the real
+	// runtime, one task at a time, stopping on the first failure/blocked task.
+	if options.orchestrated {
+		return runOrchestrated(orchestratedOnceDeps{
+			options:                 options,
+			stdout:                  stdout,
+			stderr:                  stderr,
+			deps:                    deps,
+			workspaceRoot:           workspaceRoot,
+			trustRoot:               trustRoot,
+			registry:                registry,
+			modelRegistry:           modelRegistry,
+			resolved:                resolved,
+			modelSwitcher:           modelSwitcher,
+			forwardEffort:           forwardEffort,
+			images:                  images,
+			sandboxEngine:           sandboxEngine,
+			effectiveDeferThreshold: effectiveDeferThreshold,
+			specialistRuntime:       specialistRuntime,
+			pluginActivation:        pluginActivation,
+			permissionMode:          permissionMode,
+			sessionTitle:            sessionTitle,
+			prompt:                  prompt,
+			resolveRuntimeMetadata:  providers.ResolveRuntimeMetadata,
+			parallel:                parallelReadonlyOptions{Enabled: options.parallelReadonly, MaxWorkers: options.parallelWorkers},
+			metrics:                 orchestratedMetrics,
+			metricsJSONPath:         options.metricsJSON,
+		}, orchestratedExecutionOptions{MaxTasks: 0, StopOnFailure: true, StopOnBlocked: true})
+	}
+
 	preparedSession := sessions.PreparedExec{}
 	agentPrompt := prompt
 	if shouldUseExecSession(options) {
@@ -730,6 +890,35 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 	return exitSuccess
 }
 
+// buildOrchestrationPreviewJSON wraps the shared plan-preview JSON with the
+// preview's own metadata so consumers can distinguish a dry-run from a real run.
+func buildOrchestrationPreviewJSON(res planPreviewResult) orchestrationPreviewJSON {
+	return orchestrationPreviewJSON{
+		Mode:        "orchestration-preview",
+		Executed:    false,
+		PlanPreview: buildPlanPreviewJSON(res),
+	}
+}
+
+type orchestrationPreviewJSON struct {
+	Mode        string          `json:"mode"`
+	Executed    bool            `json:"executed"`
+	PlanPreview planPreviewJSON `json:"plan_preview"`
+}
+
+// writeOrchestrationPreviewText renders the shared plan-preview text wrapped in a
+// banner that makes explicit no execution will occur.
+func writeOrchestrationPreviewText(stdout io.Writer, res planPreviewResult, showRejected bool) error {
+	if _, err := io.WriteString(stdout, "ORCHESTRATION PREVIEW — no tasks will be executed\n"); err != nil {
+		return err
+	}
+	if err := writePlanPreviewText(stdout, res, showRejected); err != nil {
+		return err
+	}
+	_, err := io.WriteString(stdout, "\nPreview complete. No provider was called and no task was executed.\n")
+	return err
+}
+
 // deferredEligibleCount returns the number of registered tools that are
 // deferred-eligible (MCP tools) AND visible to the model for THIS run — i.e. they
 // pass the same agent.ToolVisible gate (permission-mode advertising + operator
@@ -781,7 +970,7 @@ func deferredEligibleCount(registry *tools.Registry, permissionMode agent.Permis
 		if !tools.IsDeferralEligible(tool) {
 			continue
 		}
-		if !agent.ToolVisible(tool, permissionMode, enabledTools, disabledTools) {
+		if !agent.ToolVisible(tool, permissionMode, enabledTools, disabledTools, agent.ToolExposureDefault) {
 			continue
 		}
 		count++
