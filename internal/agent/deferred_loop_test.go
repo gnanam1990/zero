@@ -201,7 +201,7 @@ func TestPartitionToolsInactiveIsByteIdenticalAndDropsToolSearch(t *testing.T) {
 func legacyToolDefinitions(registry *tools.Registry, permissionMode PermissionMode, options Options) []zeroruntime.ToolDefinition {
 	definitions := make([]zeroruntime.ToolDefinition, 0)
 	for _, tool := range registry.All() {
-		if !ToolVisible(tool, permissionMode, options.EnabledTools, options.DisabledTools) {
+		if !ToolVisible(tool, permissionMode, options.EnabledTools, options.DisabledTools, options.ToolExposure) {
 			continue
 		}
 		if tool.Name() == tools.ToolSearchToolName {

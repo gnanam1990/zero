@@ -898,7 +898,7 @@ func executeToolCall(ctx context.Context, registry *tools.Registry, call ToolCal
 		}, nil
 	}
 	tool, toolFound := registry.Get(call.Name)
-	if permissionMode == PermissionModeSpecDraft && toolFound && !ToolAdvertised(tool, permissionMode) {
+	if permissionMode == PermissionModeSpecDraft && toolFound && !ToolAdvertised(tool, permissionMode, options.ToolExposure) {
 		return ToolResult{
 			ToolCallID:   call.ID,
 			Name:         call.Name,
@@ -978,6 +978,32 @@ func executeToolCall(ctx context.Context, registry *tools.Registry, call ToolCal
 	if toolFound && options.Sandbox != nil {
 		decision := options.Sandbox.Evaluate(ctx, sandboxRequest(call.Name, tool, args, permissionGranted, permissionMode, options))
 		preflightDecision = &decision
+	}
+
+	// Headless permission gate: when no interactive approver is wired up
+	// (OnPermissionRequest == nil) and this run requires one for prompt-required
+	// tools, a PermissionPrompt tool must NOT be silently executed just because
+	// the sandbox auto-allows in-workspace mutations. Emit a structured
+	// permission-required event (so the completion gate blocks the task) and
+	// return a denial instead of running the tool. This is the headless-safe
+	// counterpart of interactive mode's approval prompt.
+	if toolFound && options.RequireApproverForPromptTools && options.OnPermissionRequest == nil &&
+		!permissionGranted && tool.Safety().Permission == tools.PermissionPrompt {
+		requestEvent, ok := buildPermissionEvent(call, tool, args, permissionGranted, permissionMode, options, preflightDecision)
+		if !ok {
+			requestEvent = fallbackPermissionEvent(call, tool, args, permissionMode, options)
+		}
+		// Surface as a "prompt" outcome so evidence records permission-required
+		// (the run had no approver to answer it).
+		requestEvent.Action = PermissionActionPrompt
+		requestEvent.DecisionAction = PermissionDecisionDeny
+		requestEvent.PermissionGranted = false
+		requestEvent.DecisionReason = "requires approval in permission mode " + string(permissionMode) +
+			" but no approver is available (non-interactive run); rerun with an interactive approval mode or --skip-permissions-unsafe"
+		if options.OnPermission != nil {
+			options.OnPermission(requestEvent)
+		}
+		return deniedPermissionResult(call, requestEvent.DecisionReason, requestEvent), nil
 	}
 
 	if toolFound && options.OnPermissionRequest != nil && shouldRequestPermission(tool, args, permissionGranted, preflightDecision) {
@@ -2631,7 +2657,7 @@ func partitionToolsCached(registry *tools.Registry, permissionMode PermissionMod
 	visible := make([]tools.Tool, 0, len(registeredTools))
 	eligible := 0
 	for _, tool := range registeredTools {
-		if !ToolVisible(tool, permissionMode, options.EnabledTools, options.DisabledTools) {
+		if !ToolVisible(tool, permissionMode, options.EnabledTools, options.DisabledTools, options.ToolExposure) {
 			continue
 		}
 		visible = append(visible, tool)
@@ -2656,7 +2682,7 @@ func partitionToolsCached(registry *tools.Registry, permissionMode PermissionMod
 	loader, loaderFound := registry.Get(tools.ToolSearchToolName)
 	loaderUsable := loaderFound &&
 		!containsToolName(options.DisabledTools, tools.ToolSearchToolName) &&
-		ToolAdvertised(loader, permissionMode)
+		ToolAdvertised(loader, permissionMode, options.ToolExposure)
 
 	active := options.DeferThreshold > 0 && eligible >= options.DeferThreshold && loaderUsable
 
@@ -2769,8 +2795,22 @@ func runtimeToolDefinition(tool tools.Tool) zeroruntime.ToolDefinition {
 	}
 }
 
-func ToolVisible(tool tools.Tool, permissionMode PermissionMode, enabledTools []string, disabledTools []string) bool {
-	return ToolAllowedByFilters(tool.Name(), enabledTools, disabledTools) && ToolAdvertised(tool, permissionMode)
+func ToolVisible(tool tools.Tool, permissionMode PermissionMode, enabledTools []string, disabledTools []string, exposure ToolExposurePolicy) bool {
+	return ToolAllowedByFilters(tool.Name(), enabledTools, disabledTools) && ToolAdvertised(tool, permissionMode, exposure)
+}
+
+// ExposedToolNames returns the sorted names of the tools the agent would
+// advertise to the provider for the given registry/mode/options, decided exactly
+// as partitionTools does (visibility gate + deferral). It is exported for
+// diagnostics and tests; the runtime path calls partitionToolsCached directly.
+func ExposedToolNames(registry *tools.Registry, permissionMode PermissionMode, options Options) []string {
+	defs, _ := partitionTools(registry, permissionMode, options, nil)
+	names := make([]string, 0, len(defs))
+	for _, d := range defs {
+		names = append(names, d.Name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func ToolAllowedByFilters(name string, enabledTools []string, disabledTools []string) bool {
@@ -2850,7 +2890,7 @@ func propertyToRuntimeMap(property tools.PropertySchema) map[string]any {
 	return schema
 }
 
-func ToolAdvertised(tool tools.Tool, permissionMode PermissionMode) bool {
+func ToolAdvertised(tool tools.Tool, permissionMode PermissionMode, exposure ToolExposurePolicy) bool {
 	if tool.Safety().Permission == tools.PermissionDeny {
 		return false
 	}
@@ -2858,6 +2898,16 @@ func ToolAdvertised(tool tools.Tool, permissionMode PermissionMode) bool {
 		return toolAdvertisedInSpecDraft(tool)
 	}
 	if permissionMode == PermissionModeAuto {
+		// Task-compatible exposure advertises the full, real tool set (read/edit/
+		// shell/network) so an implementation task can SEE and REQUEST the editing
+		// tools it needs, while the permission evaluator still decides at call time
+		// whether to allow, prompt, or deny. This separates advertisement from
+		// authorization: advertising never grants execution permission. The
+		// operator's --enabled-tools / --disabled-tools filters are applied by the
+		// caller (ToolVisible) and still restrict what is actually exposed.
+		if exposure == ToolExposureTaskCompatible {
+			return true
+		}
 		return tool.Safety().Permission == tools.PermissionAllow || tool.Safety().AdvertiseInAuto
 	}
 	if permissionMode == PermissionModeMemberAuto {

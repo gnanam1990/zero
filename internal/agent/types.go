@@ -19,6 +19,27 @@ type PermissionMode string
 type PermissionAction string
 type PermissionDecisionAction string
 
+// ToolExposurePolicy controls which tools are ADVERTISED to the provider,
+// independently of which tools are AUTHORIZED to run. Authorization is decided at
+// call time by the permission evaluator (workspace trust, sandbox, hooks,
+// approval) and is unaffected by this policy. Advertising a tool therefore never
+// grants the authority to use it.
+type ToolExposurePolicy string
+
+const (
+	// ToolExposureDefault keeps the historical advertising behavior: a mode's
+	// advertised set is exactly what its permission gate permits (e.g. Auto hides
+	// prompt-required mutating tools such as write_file/edit_file/apply_patch).
+	ToolExposureDefault ToolExposurePolicy = "default"
+	// ToolExposureTaskCompatible advertises the task-appropriate tools (read,
+	// edit, shell, network) even when the permission mode would normally hide them
+	// (Auto), so the model can see and request them for an implementation/refactor/
+	// debug/test/shell task. Execution still requires the normal permission
+	// decision at call time; in a headless Auto run a prompt-required tool is
+	// denied and the task is blocked rather than silently allowed.
+	ToolExposureTaskCompatible ToolExposurePolicy = "task-compatible"
+)
+
 const (
 	PermissionModeAuto      PermissionMode = "auto"
 	PermissionModeAsk       PermissionMode = "ask"
@@ -237,8 +258,14 @@ type Options struct {
 	CompactionPreserveLast int
 	Registry               *tools.Registry
 	PermissionMode         PermissionMode
-	Autonomy               string
-	Sandbox                *sandbox.Engine
+	// ToolExposure selects how aggressively tools are advertised to the provider,
+	// independent of permission mode. See ToolExposurePolicy. Zero (default) keeps
+	// the historical per-mode advertising; orchestrated runs set task-compatible
+	// exposure so implementation tasks can see editing tools without promoting the
+	// permission mode to unsafe.
+	ToolExposure ToolExposurePolicy
+	Autonomy     string
+	Sandbox      *sandbox.Engine
 	// FileTracker records per-session file read/write versions so the write tools
 	// can detect a file changed on disk outside Zero since it was last read. nil
 	// disables the check. Created once per session and threaded into every tool run.
@@ -304,6 +331,18 @@ type Options struct {
 	// finalizes as INCOMPLETE (Result.Incomplete) rather than success. Default
 	// false leaves the loop byte-identical, so the interactive TUI is unaffected.
 	RequireCompletionSignal bool
+
+	// RequireApproverForPromptTools makes a HEADLESS run require an interactive
+	// approver for tools whose safety level is PermissionPrompt. Without it the
+	// default sandbox behavior auto-allows in-workspace mutations in Auto mode, so
+	// a prompt-required tool (e.g. write_file) runs silently when no approver is
+	// wired up. With it, such a call returns a structured permission-required
+	// denial instead of executing — the completion gate then blocks the task.
+	// Orchestrated runs set this so an autonomous model cannot mutate the repo
+	// without explicit user approval; interactive runs (which wire
+	// OnPermissionRequest) and normal headless exec (which rely on the sandbox
+	// auto-allow) leave it false and are unaffected.
+	RequireApproverForPromptTools bool
 
 	runPermissions *permissionRunState
 }

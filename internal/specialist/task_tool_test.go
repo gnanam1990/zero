@@ -339,7 +339,7 @@ func TestTaskToolRejectsInvalidParameters(t *testing.T) {
 
 func TestTaskToolIsAdvertisedInAutoMode(t *testing.T) {
 	tool := NewTaskTool(Executor{})
-	if !agent.ToolVisible(tool, agent.PermissionModeAuto, nil, nil) {
+	if !agent.ToolVisible(tool, agent.PermissionModeAuto, nil, nil, agent.ToolExposureDefault) {
 		t.Fatal("Task should be visible in auto mode so the TUI can request permission")
 	}
 }
