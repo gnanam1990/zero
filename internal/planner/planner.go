@@ -71,6 +71,39 @@ func Plan(input PlannerInput) (ExecutionPlan, error) {
 	prompt := strings.TrimSpace(input.Prompt)
 	primary := mapKind(input.TaskClassification.Primary)
 
+	// Explicit multi-task decomposition: when the prompt contains at least two
+	// numbered task sections (Task 1:, Task 2:, etc.), each with meaningful
+	// imperative content, produce one planner.Task per section. This takes
+	// precedence over the implicit classification-based decomposition so a
+	// prompt with explicit independent tasks doesn't collapse into a single
+	// task based on the classifier's keyword precedence.
+	if explicitTasks := parseExplicitTasks(prompt); len(explicitTasks) >= 2 {
+		b := &taskBuilder{}
+		for _, et := range explicitTasks {
+			taskKind := classifyExplicitTask(et.Body, primary)
+			title := titleFromHeading(et.Heading, titleFor(taskKind, et.Body))
+			t := b.add(taskKind, title, et.Body, nil)
+			_ = t // index not needed — all are independent
+		}
+		// All explicit tasks are independent and read-only by default.
+		for i := range b.tasks {
+			b.tasks[i].CanRunParallel = true
+		}
+
+		tasks := finalizeTasks(b.tasks, prompt)
+		plan := ExecutionPlan{
+			PlanID:       planID(input),
+			Summary:      summaryFor(primary, tasks),
+			Tasks:        tasks,
+			Dependencies: collectDependencies(tasks),
+			Metadata:     buildMetadata(input, primary, tasks),
+		}
+		if err := Validate(plan); err != nil {
+			return ExecutionPlan{}, err
+		}
+		return plan, nil
+	}
+
 	// Normalize: a request that implements *and* tests something should anchor
 	// the graph on the implementation, which the test tasks then depend on. The
 	// classifier may rank "write tests" above "implement", so we re-anchor here

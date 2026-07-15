@@ -104,6 +104,10 @@ type orchestratedRunMetrics struct {
 	TotalProviderCalls int `json:"provider_calls"`
 	TotalInputTokens   int `json:"total_input_tokens"`
 	TotalOutputTokens  int `json:"total_output_tokens"`
+
+	// Survey metrics (optional, backward-compatible).
+	SurveyBuildMs   int64 `json:"survey_build_ms,omitempty"`
+	SurveyCacheHits int   `json:"survey_cache_hits,omitempty"`
 }
 
 func (m *orchestratedRunMetrics) enterWorker() {
@@ -233,6 +237,14 @@ func orchestratedMetricsDetailed(m *orchestratedRunMetrics) string {
 		b.WriteString("  effective speedup: n/a (no concurrent batch)\n")
 	}
 
+	if m.SurveyBuildMs > 0 || m.SurveyCacheHits > 0 {
+		fmt.Fprintf(&b, "  survey: built in %s", formatMillis(m.SurveyBuildMs))
+		if m.SurveyCacheHits > 0 {
+			fmt.Fprintf(&b, " (cache hits: %d)", m.SurveyCacheHits)
+		}
+		b.WriteString("\n")
+	}
+
 	if len(m.Batches) > 0 {
 		b.WriteString("  parallel batches:\n")
 		for _, batch := range m.Batches {
@@ -307,6 +319,10 @@ func orchestratedMetricsJSON(m *orchestratedRunMetrics) map[string]any {
 	} else {
 		out["effective_speedup"] = nil
 		out["worker_efficiency"] = nil
+	}
+	if m.SurveyBuildMs > 0 || m.SurveyCacheHits > 0 {
+		out["survey_build_ms"] = m.SurveyBuildMs
+		out["survey_cache_hits"] = m.SurveyCacheHits
 	}
 	return out
 }

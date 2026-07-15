@@ -508,7 +508,7 @@ func (c *Coordinator) executeTaskWithMu(
 
 	emitMu(events, eventMu, Event{Type: EventTaskStarted, Task: &task, ProviderKind: providerKind, ModelID: modelID, BatchNum: batchNum, Timestamp: c.Now()})
 
-	taskPrompt := buildTaskPrompt(c.cfg.Prompt, preview.Plan, task)
+	taskPrompt := c.buildTaskPromptWithSurvey(preview.Plan, task)
 
 	// Build runner.
 	var runner executor.Runner
@@ -570,6 +570,45 @@ func (c *Coordinator) executeTaskWithMu(
 	}
 
 	return result, changes, verification, status, perf
+}
+
+// buildTaskPromptWithSurvey builds the task prompt and injects a repository
+// survey for read-only tasks when available. The survey gives the agent a
+// comprehensive starting index so it doesn't waste tool calls discovering the
+// repository structure.
+func (c *Coordinator) buildTaskPromptWithSurvey(plan planner.ExecutionPlan, task planner.Task) string {
+	prompt := buildTaskPrompt(c.cfg.Prompt, plan, task)
+	if c.survey == nil || c.cwd == "" {
+		return prompt
+	}
+	// Only inject the survey for read-only task kinds that benefit from it.
+	if !executor.TaskRequiresRepositoryVerification(task) {
+		view := "all"
+		// Choose the filtered view based on task kind.
+		switch task.TaskKind {
+		case planner.KindRepositorySearch:
+			// If the task title mentions docs, use the docs view.
+			if strings.Contains(strings.ToLower(task.Title), "doc") {
+				view = "docs"
+			} else if strings.Contains(strings.ToLower(task.Title), "source") ||
+				strings.Contains(strings.ToLower(task.Title), "code") {
+				view = "source"
+			}
+		case planner.KindCodeReview, planner.KindSecurityReview:
+			view = "source"
+		case planner.KindDocumentation:
+			view = "docs"
+		case planner.KindArchitecture:
+			view = "all"
+		default:
+			return prompt
+		}
+		surveyCtx := RenderSurveyForTask(c.survey, view)
+		if surveyCtx != "" {
+			prompt = prompt + "\n\n" + surveyCtx
+		}
+	}
+	return prompt
 }
 
 func buildTaskPrompt(request string, plan planner.ExecutionPlan, task planner.Task) string {
@@ -789,6 +828,10 @@ func (c *Coordinator) buildMetricsSnapshot(m *runMetricsAccum, executed []orches
 		TotalOutputTokens:  m.totalOutputTokens,
 		Tasks:              m.tasks,
 		Batches:            m.batches,
+	}
+	if c.survey != nil {
+		snapshot.SurveyBuildMs = c.survey.BuildMs
+		snapshot.SurveyCacheHits = c.survey.CacheHits
 	}
 	// effective speedup
 	if len(m.batches) > 0 {

@@ -265,6 +265,15 @@ func (m model) approveAndRunOrchestration() (model, tea.Cmd) {
 		}),
 	}
 
+	// Build repository survey once and share across all read-only tasks.
+	var orchSurvey *orchestration.Survey
+	if m.cwd != "" {
+		orchSurvey, _ = orchestration.GetSurvey(m.cwd, orchestration.SurveyOptions{})
+	}
+	if orchSurvey != nil {
+		opts = append(opts, orchestration.WithSurvey(orchSurvey))
+	}
+
 	coord := orchestration.New(cfg, m.cwd, builder, candidates, m.registry, baseOpts, opts...)
 	m.orch.coordinator = coord
 

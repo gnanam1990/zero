@@ -17,6 +17,7 @@ import (
 	"github.com/Gitlawb/zero/internal/hooks"
 	"github.com/Gitlawb/zero/internal/modelregistry"
 	"github.com/Gitlawb/zero/internal/modelrouter"
+	"github.com/Gitlawb/zero/internal/orchestration"
 	"github.com/Gitlawb/zero/internal/planner"
 	"github.com/Gitlawb/zero/internal/providers"
 	"github.com/Gitlawb/zero/internal/sandbox"
@@ -95,6 +96,9 @@ type orchestratedOnceDeps struct {
 	// metricsJSONPath, when set, writes the full metrics object to this path
 	// as JSON in addition to any inline rendering.
 	metricsJSONPath string
+	// survey is the shared repository survey built once per run and injected
+	// into read-only task prompts to reduce redundant tool calls.
+	survey *orchestration.Survey
 }
 
 // parallelReadonlyOptions carries the bounded read-only concurrency configuration.
@@ -187,6 +191,18 @@ func runOrchestrated(od orchestratedOnceDeps, opts orchestratedExecutionOptions)
 	}
 
 	candidates, profileByCandidate := buildExecutableCandidates(od.resolved, &od.modelRegistry, od.resolveRuntimeMetadata)
+
+	// Build a repository survey once and share it across all read-only tasks.
+	// This gives each read-only task a comprehensive starting index so the agent
+	// doesn't waste tool calls discovering the repository structure.
+	if od.workspaceRoot != "" {
+		s, _ := orchestration.GetSurvey(od.workspaceRoot, orchestration.SurveyOptions{})
+		od.survey = s
+		if od.metrics != nil && s != nil {
+			od.metrics.SurveyBuildMs = s.BuildMs
+			od.metrics.SurveyCacheHits = s.CacheHits
+		}
+	}
 
 	var planStart time.Time
 	if od.metrics != nil {
@@ -719,6 +735,32 @@ func executeOrchestratedTask(
 	}
 
 	taskPrompt := buildOrchestratedTaskPrompt(od.prompt, preview.Plan, task, scheduler.ExecutionState{}, orchestratedCapabilityNote(orchestratedToolAllowlist(task, od.registry, od.options.enabledTools, od.options.disabledTools), od.registry))
+	// Inject the repository survey for read-only tasks.
+	if od.survey != nil && !executor.TaskRequiresRepositoryVerification(task) {
+		view := "all"
+		switch task.TaskKind {
+		case planner.KindRepositorySearch:
+			if strings.Contains(strings.ToLower(task.Title), "doc") {
+				view = "docs"
+			} else if strings.Contains(strings.ToLower(task.Title), "source") || strings.Contains(strings.ToLower(task.Title), "code") {
+				view = "source"
+			}
+		case planner.KindCodeReview, planner.KindSecurityReview:
+			view = "source"
+		case planner.KindDocumentation:
+			view = "docs"
+		case planner.KindArchitecture:
+			view = "all"
+		default:
+			view = ""
+		}
+		if view != "" {
+			surveyCtx := orchestration.RenderSurveyForTask(od.survey, view)
+			if surveyCtx != "" {
+				taskPrompt = taskPrompt + "\n\n" + surveyCtx
+			}
+		}
+	}
 
 	baseOpts := buildOrchestratedAgentOptions(od, sessionID, modelID, task, selfCorrector, fileDiagnostics, fileTracker, hookDispatcher)
 	runner := od.runner

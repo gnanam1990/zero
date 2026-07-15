@@ -142,6 +142,9 @@ type RunMetrics struct {
 	Batches            []BatchMetric
 	EffectiveSpeedup   *float64
 	WorkerEfficiency   *float64
+	// Survey metrics (optional, backward-compatible — zero when no survey was built).
+	SurveyBuildMs   int64 `json:"survey_build_ms,omitempty"`
+	SurveyCacheHits int   `json:"survey_cache_hits,omitempty"`
 }
 
 // TaskMetric is the per-task timing/usage record.
@@ -243,6 +246,7 @@ type Coordinator struct {
 	candidates    CandidateBuilder
 	registry      *tools.Registry
 	clock         func() time.Time
+	survey        *Survey
 }
 
 // Option configures a Coordinator.
@@ -276,6 +280,13 @@ func WithRepoDelta(fn RepoDeltaFunc) Option {
 // WithClock overrides the clock (for tests).
 func WithClock(fn func() time.Time) Option {
 	return func(c *Coordinator) { c.clock = fn }
+}
+
+// WithSurvey injects a pre-computed repository survey into the coordinator so
+// read-only tasks receive a compact repository overview in their prompt
+// instead of discovering the structure through many sequential tool calls.
+func WithSurvey(s *Survey) Option {
+	return func(c *Coordinator) { c.survey = s }
 }
 
 // Now returns the current time from the coordinator's clock.
