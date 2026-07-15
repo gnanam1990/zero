@@ -951,6 +951,14 @@ func normalizeProvider(profile ProviderProfile, env map[string]string, options n
 	profile.AuthHeaderValue = strings.TrimSpace(profile.AuthHeaderValue)
 	profile.Model = strings.TrimSpace(profile.Model)
 
+	// The optional capability override must list only known capabilities. This
+	// is the runtime gate (config validation also checks it); a bad override on
+	// the active provider is fatal so the run never proceeds on undeclared
+	// abilities.
+	if err := profile.ValidateCapabilityOverride(); err != nil {
+		return ProviderProfile{}, providerError(profile, "%s", err.Error())
+	}
+
 	if profile.Name == "" {
 		profile.Name = string(ProviderKindOpenAI)
 	}
