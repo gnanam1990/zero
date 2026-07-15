@@ -33,19 +33,28 @@ func TestToolAdvertisedMemberAuto(t *testing.T) {
 	denied := safetyTool{name: "blocked", safety: tools.Safety{SideEffect: tools.SideEffectRead, Permission: tools.PermissionDeny}}
 
 	// Plain Auto hides prompt-requiring mutators (the read-only member problem).
-	if ToolAdvertised(write, PermissionModeAuto) || ToolAdvertised(shell, PermissionModeAuto) {
+	if ToolAdvertised(write, PermissionModeAuto, ToolExposureDefault) || ToolAdvertised(shell, PermissionModeAuto, ToolExposureDefault) {
 		t.Fatal("Auto must NOT advertise write/shell prompt tools")
 	}
 
 	for _, tool := range []tools.Tool{write, shell, read} {
-		if !ToolAdvertised(tool, PermissionModeMemberAuto) {
+		if !ToolAdvertised(tool, PermissionModeMemberAuto, ToolExposureDefault) {
 			t.Fatalf("member-auto must advertise %q", tool.Name())
 		}
 	}
-	if ToolAdvertised(network, PermissionModeMemberAuto) {
+	if ToolAdvertised(network, PermissionModeMemberAuto, ToolExposureDefault) {
 		t.Fatal("member-auto must NOT advertise a network prompt tool")
 	}
-	if ToolAdvertised(denied, PermissionModeMemberAuto) {
+	if ToolAdvertised(denied, PermissionModeMemberAuto, ToolExposureDefault) {
 		t.Fatal("member-auto must NOT advertise a denied tool")
+	}
+
+	// Task-compatible exposure advertises the mutators Auto hides, but is NOT a
+	// permission grant: the evaluator still decides at call time.
+	if !ToolAdvertised(write, PermissionModeAuto, ToolExposureTaskCompatible) {
+		t.Fatal("task-compatible exposure must advertise write_file in Auto")
+	}
+	if ToolAdvertised(denied, PermissionModeAuto, ToolExposureTaskCompatible) {
+		t.Fatal("task-compatible exposure must still NOT advertise a denied tool")
 	}
 }

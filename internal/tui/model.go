@@ -190,6 +190,8 @@ type model struct {
 	// from the TickMsg handler / beginRun, cleared when the handler stops the loop.
 	spinnerTicking bool
 	pending        bool
+	// orch holds session-local orchestration state (mode, config, runtime).
+	orch orchestrationState
 	// turnStartedAt is when the in-flight run began; the working status line
 	// renders the live elapsed time from it so a long or stalled turn never looks
 	// like a frozen terminal (for ANY provider, not just slow ones). Zero = idle.
@@ -822,6 +824,7 @@ func newModel(ctx context.Context, options Options) model {
 		setup:                       newSetupState(options.Setup),
 		setupSave:                   options.Setup.Save,
 		dictation:                   newDictationController(options),
+		orch:                        newOrchestrationState(),
 	}
 	// Apply an explicit theme immediately; auto stays on the dark default until
 	// Init's terminal background probe resolves it (see Init / BackgroundColorMsg).
@@ -1266,7 +1269,30 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// off (/voice) to type normally.
 			return m.handleVoiceSpacePress(msg)
 		case keyIs(msg, tea.KeyEsc):
-			// Esc is heavily overloaded below (subchat exit, MCP cancel, ask-user,
+			// Orchestration: Esc cancels an awaiting-approval plan or an
+			// in-flight run (before the normal cancel-confirmation logic).
+			if m.orch.awaitingApproval {
+				m.orch.awaitingApproval = false
+				m.orch.preview = nil
+				m.orch.active = false
+				m.pending = false
+				m.turnStartedAt = time.Time{}
+				m.transcript = reduceTranscript(m.transcript, transcriptAction{
+					kind: actionAppendSystem,
+					text: "Orchestration plan cancelled.",
+				})
+				return m, nil
+			}
+			if m.orch.active && m.orch.cancelFunc != nil {
+				m = m.cancelOrchestration()
+				m.pending = false
+				m.turnStartedAt = time.Time{}
+				m.transcript = reduceTranscript(m.transcript, transcriptAction{
+					kind: actionAppendSystem,
+					text: "Orchestration cancelled.",
+				})
+				return m, nil
+			}
 			// permission deny, wizard/picker/suggestions dismiss, ...) before ever
 			// reaching the run-cancel fallback. Capture whether this press really
 			// is the confirming second Esc BEFORE any of those branches can fire,
@@ -1387,6 +1413,15 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearComposer()
 			return m, nil
 		case keyIs(msg, tea.KeyEnter):
+			if m.orch.awaitingApproval {
+				m.burstCount = 0
+				return m.approveAndRunOrchestration()
+			}
+			if m.orch.active && m.orch.preview != nil && !m.orch.awaitingApproval {
+				// Orchestration in progress — ignore Enter.
+				m.burstCount = 0
+				return m, nil
+			}
 			if m.transcriptDetailed {
 				if command := parseCommand(m.input.Value()); command.kind == commandTranscript {
 					m.input.SetValue("")
@@ -2090,6 +2125,14 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var fireCmd tea.Cmd
 		m, fireCmd = m.fireDueLoopIfIdle()
 		return m, tea.Batch(fireCmd, m.scheduleLoopTick())
+	case orchEventMsg:
+		return m.handleOrchEvent(msg)
+	case orchPlanReadyMsg:
+		return m.handleOrchPlanReady(msg)
+	case orchPermissionMsg:
+		return m.handleOrchPermission(msg)
+	case orchestrationTickMsg:
+		return m.handleOrchTick()
 	case agentResponseMsg:
 		if msg.runID != m.activeRunID {
 			// A run cancelled while in flight still finishes in its goroutine and
@@ -3181,6 +3224,14 @@ func (m model) liveReasoningBodyCap() int {
 }
 
 func (m model) interimBlock(width int) string {
+	// Orchestration mode: render task cards instead of the normal working line.
+	if m.orch.active && m.orch.preview != nil {
+		cards := m.orchTaskCards()
+		if cards != "" {
+			return cards
+		}
+		return "Orchestrating…"
+	}
 	text := strings.TrimRight(m.streamingTextString(), "\n")
 	reasoning := strings.TrimRight(m.streamingReasoning, "\n")
 	blocks := []string{}
@@ -4109,6 +4160,8 @@ func (m model) handleSubmit() (tea.Model, tea.Cmd) {
 		return m.startNewSession(), nil
 	case commandLoop:
 		return m.handleLoopCommand(command.text)
+	case commandOrchestrate:
+		return m.handleOrchestrateCommand(command.text)
 	case commandExit:
 		// Closing the session stops its foreground loops mid-task; warn once so a
 		// token-spending loop isn't ended by reflex.
@@ -4436,6 +4489,10 @@ func (m model) handleSubmit() (tea.Model, tea.Cmd) {
 	case commandPrompt:
 		if intent, ok := detectMCPSetupIntent(command.text); ok {
 			return m.openMCPAddWizardFromIntent(intent), nil
+		}
+		// Orchestration mode: route through the orchestration pipeline.
+		if m.orch.mode == orchModeOrchestrated && !m.orch.active && !m.pending {
+			return m.launchOrchestratedPrompt(command.text)
 		}
 		return m.launchPrompt(command.text)
 	default:

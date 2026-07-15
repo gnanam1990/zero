@@ -48,6 +48,7 @@ const (
 	commandNew
 	commandSkills
 	commandLoop
+	commandOrchestrate
 	commandVoice
 	commandSTTModel
 	commandUnknown
@@ -99,6 +100,13 @@ var commandDefinitions = []commandDefinition{
 		group:       commandGroupModel,
 		description: "Choose the speech-to-text (dictation) model.",
 		kind:        commandSTTModel,
+	},
+	{
+		name:        "/orchestrate",
+		usage:       "/orchestrate [on|off|workers <n>|parallel|metrics|preview]",
+		group:       commandGroupRuntime,
+		description: "Toggle orchestrated execution mode or adjust settings.",
+		kind:        commandOrchestrate,
 	},
 	{
 		name:        "/voice",

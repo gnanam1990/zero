@@ -89,6 +89,11 @@ func (m model) startNewSession() model {
 	m.lastImageLabels = nil
 	m.lastDocuments = nil
 
+	// Reset orchestration state for the new session. An active run would
+	// have been cancelled by the caller (commandNew checks m.pending first),
+	// but the runtime fields are cleared here so no stale state leaks.
+	m.orch = newOrchestrationState()
+
 	note := "Started a new session."
 	if previousID != "" {
 		note = "New session started. Previous session saved as " + previousID +

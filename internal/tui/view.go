@@ -66,6 +66,11 @@ func (m model) titleBar(width int) string {
 		compactLeft = branchOnly
 	}
 	model := m.titleModelSegment()
+	// Append the orchestration mode indicator when orchestrated mode is active.
+	if m.orch.mode == orchModeOrchestrated {
+		orchLabel := zeroTheme.accent.Render(" · " + m.orch.modeLabel())
+		model = model + orchLabel
+	}
 	ctx := ""
 	if window := m.modelContextWindow(m.modelName); window > 0 {
 		ctx = zeroTheme.faint.Render(" · " + formatContextWindow(window))

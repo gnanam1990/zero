@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/Gitlawb/zero/internal/modelregistry"
 )
 
 const OpenAIBaseURL = "https://api.openai.com/v1"
@@ -41,6 +43,28 @@ type ProviderProfile struct {
 	Model           string            `json:"model,omitempty"`
 	ParseThinkTags  *bool             `json:"parseThinkTags,omitempty"`
 	Description     string            `json:"description,omitempty"`
+	// Capabilities is an OPTIONAL, explicit, factual override of the model
+	// capabilities used for routing. It is honored only as an authoritative
+	// declaration by the user that the configured model supports these
+	// abilities; Zero never infers capabilities from the model name. Unknown
+	// capability names are rejected at config validation (see
+	// ValidateCapabilityOverride). It does not add pricing or other metadata.
+	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+// ValidateCapabilityOverride returns an error if any named capability in the
+// profile is not a known modelregistry capability. It is the single gate for the
+// optional provider-profile capability override and must not be silently
+// ignored: unknown names are rejected both at config validation and at provider
+// normalization time.
+func (p ProviderProfile) ValidateCapabilityOverride() error {
+	for _, c := range p.Capabilities {
+		cap := modelregistry.ModelCapability(strings.TrimSpace(strings.ToLower(c)))
+		if !modelregistry.ValidModelCapability(cap) {
+			return fmt.Errorf("provider %q: unknown capability %q", p.Name, c)
+		}
+	}
+	return nil
 }
 
 func HasProviderProfile(profile ProviderProfile) bool {
@@ -694,6 +718,7 @@ func (profile *ProviderProfile) UnmarshalJSON(data []byte) error {
 		ParseThinkTags       *bool             `json:"parseThinkTags"`
 		ParseThinkTagsSnake  *bool             `json:"parse_think_tags"`
 		Description          string            `json:"description"`
+		Capabilities         []string          `json:"capabilities"`
 	}
 
 	var raw rawProfile
@@ -717,6 +742,7 @@ func (profile *ProviderProfile) UnmarshalJSON(data []byte) error {
 	profile.Model = strings.TrimSpace(firstNonEmpty(raw.Model, raw.ModelID))
 	profile.ParseThinkTags = firstNonNilBool(raw.ParseThinkTags, raw.ParseThinkTagsSnake)
 	profile.Description = strings.TrimSpace(raw.Description)
+	profile.Capabilities = raw.Capabilities
 	return nil
 }
 

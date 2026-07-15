@@ -53,7 +53,7 @@ func TestStopToolRejectsInvalidParameters(t *testing.T) {
 
 func TestStopToolIsAdvertisedInAutoMode(t *testing.T) {
 	tool := NewStopTool(nil)
-	if !agent.ToolVisible(tool, agent.PermissionModeAuto, nil, nil) {
+	if !agent.ToolVisible(tool, agent.PermissionModeAuto, nil, nil, agent.ToolExposureDefault) {
 		t.Fatal("TaskStop should be visible in auto mode so the TUI can request permission")
 	}
 }

@@ -43,6 +43,15 @@ const (
 	ModelCapabilitySystemPrompt ModelCapability = "system-prompt"
 	ModelCapabilityPromptCache  ModelCapability = "prompt-cache"
 	ModelCapabilityLongContext  ModelCapability = "long-context"
+
+	// Extended capabilities. These are intentionally disjoint from the core
+	// chat/vision/reasoning set so a model can be tagged with finer-grained
+	// abilities without implying it is a general-purpose chat model.
+	ModelCapabilityParallelToolCalls ModelCapability = "parallel-tool-calls"
+	ModelCapabilityThinkingTokens    ModelCapability = "thinking-tokens"
+	ModelCapabilityImageGeneration   ModelCapability = "image-generation"
+	ModelCapabilityEmbeddings        ModelCapability = "embeddings"
+	ModelCapabilityAudio             ModelCapability = "audio"
 )
 
 type ModelCapabilities []ModelCapability
@@ -207,6 +216,39 @@ func (model ModelEntry) Validate() error {
 	}
 	if len(model.APIProviders) > 0 && !model.AllowsProvider(model.Provider) {
 		return fmt.Errorf("primary provider %q not allowed by api providers", model.Provider)
+	}
+	if err := validateCapabilityCombinations(model); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateCapabilityCombinations rejects logically impossible capability sets.
+// It only fires when the relevant capabilities are declared, so pre-existing
+// curated entries (which predate these finer-grained capabilities) are
+// unaffected. It encodes factual contradictions, never routing or preference.
+func validateCapabilityCombinations(model ModelEntry) error {
+	// An embeddings model exposes vector search, not a conversational surface, so
+	// it must not also declare general-purpose chat capabilities.
+	if model.Supports(ModelCapabilityEmbeddings) {
+		for _, contradictory := range []ModelCapability{
+			ModelCapabilityVision,
+			ModelCapabilityToolCalling,
+			ModelCapabilityReasoning,
+			ModelCapabilityStreaming,
+			ModelCapabilityImageGeneration,
+			ModelCapabilityAudio,
+		} {
+			if model.Supports(contradictory) {
+				return fmt.Errorf("model %q is an embeddings model but also declares capability %q", model.ID, contradictory)
+			}
+		}
+	}
+	// A reasoning model must expose at least one way to engage reasoning.
+	if model.Supports(ModelCapabilityReasoning) &&
+		len(model.ReasoningEfforts) == 0 &&
+		!model.Supports(ModelCapabilityThinkingTokens) {
+		return fmt.Errorf("model %q declares reasoning but lists no reasoning efforts or thinking tokens", model.ID)
 	}
 	return nil
 }
@@ -419,7 +461,7 @@ func ValidReasoningEffort(effort ReasoningEffort) bool {
 
 func ValidModelCapability(capability ModelCapability) bool {
 	switch capability {
-	case ModelCapabilityChat, ModelCapabilityStreaming, ModelCapabilityToolCalling, ModelCapabilityVision, ModelCapabilityJSONMode, ModelCapabilityReasoning, ModelCapabilitySystemPrompt, ModelCapabilityPromptCache, ModelCapabilityLongContext:
+	case ModelCapabilityChat, ModelCapabilityStreaming, ModelCapabilityToolCalling, ModelCapabilityVision, ModelCapabilityJSONMode, ModelCapabilityReasoning, ModelCapabilitySystemPrompt, ModelCapabilityPromptCache, ModelCapabilityLongContext, ModelCapabilityParallelToolCalls, ModelCapabilityThinkingTokens, ModelCapabilityImageGeneration, ModelCapabilityEmbeddings, ModelCapabilityAudio:
 		return true
 	default:
 		return false

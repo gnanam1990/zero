@@ -52,12 +52,21 @@ func ValidateBytes(data []byte) (FileConfig, []Issue) {
 }
 
 func validateSemantics(cfg FileConfig) []Issue {
+	var issues []Issue
 	if _, _, err := normalizeProviders(cfg.Providers, cfg.ActiveProvider); err != nil {
 		// normalizeProviders already redacts secrets via providerError.
-		return []Issue{{FieldPath: "providers", Message: err.Error()}}
+		issues = append(issues, Issue{FieldPath: "providers", Message: err.Error()})
+	}
+	// Capability overrides must name only known capabilities; this is independent
+	// of (and stricter than) the normalize-time check so a bad override on a
+	// non-active provider is still surfaced instead of silently dropped.
+	for i, p := range cfg.Providers {
+		if err := p.ValidateCapabilityOverride(); err != nil {
+			issues = append(issues, Issue{FieldPath: fmt.Sprintf("providers[%d].capabilities", i), Message: err.Error()})
+		}
 	}
 	if err := validateSTTConfig(cfg.STT); err != nil {
-		return []Issue{{FieldPath: "stt", Message: err.Error()}}
+		issues = append(issues, Issue{FieldPath: "stt", Message: err.Error()})
 	}
-	return nil
+	return issues
 }

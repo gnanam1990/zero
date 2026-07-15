@@ -363,6 +363,10 @@ func runWithDeps(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 		return runConfig(args[1:], stdout, stderr, deps)
 	case "models":
 		return runModels(args[1:], stdout, stderr)
+	case "route-preview":
+		return runRoutePreview(args[1:], stdout, stderr, deps)
+	case "plan-preview":
+		return runPlanPreview(args[1:], stdout, stderr, deps)
 	case "providers":
 		return runProviders(args[1:], stdout, stderr, deps)
 	case "doctor":
@@ -1138,6 +1142,8 @@ Commands:
   setup      Guide first-run provider setup
   config     Inspect resolved Go configuration without leaking secrets
   models     List Zero model registry entries
+  route-preview  Preview task classification and model-router decisions (local, dry-run)
+  plan-preview   Preview classification, planning, scheduler state, and per-task routing (local, dry-run)
   providers  Inspect resolved provider profiles
   doctor     Run backend health checks for config and provider setup
   context    Report workspace context budget usage
@@ -1348,7 +1354,35 @@ Flags:
                                     Override notification mode for this run
       --no-notify                   Disable notifications for this run
       --no-completion-gate          Accept a no-tool-call reply as final without the INCOMPLETE
-                                    downgrade (for conversational callers with an operator present)
+                                     downgrade (for conversational callers with an operator present)
+
+  Offline orchestration preview (no execution, no provider, no session):
+      --orchestration-preview       Run the classify→plan→schedule→route dry-run and print it
+      --provider <provider>         Routing preference for the preview
+      --allow-provider <provider>   Repeatable hard allowlist of providers (preview)
+      --deny-model <model>          Repeatable model denylist (preview)
+      --require-known-price         Reject models without known pricing (preview)
+      --max-input-cost <number>     Max registry input cost unit USD/1M tokens (preview)
+      --max-output-cost <number>    Max registry output cost unit USD/1M tokens (preview)
+      --show-rejected               Show full rejected-model details (preview text)
+
+   Orchestrated execution (one session, multiple tasks, sequential):
+      --orchestrated-once          Run exactly ONE planned task end-to-end, then stop
+      --orchestrated               Run the FULL planned DAG sequentially, one task
+                                     at a time, stopping on the first failure/block
+      --parallel-readonly          With --orchestrated, run independent read-only
+                                     ready tasks concurrently (bounded). Mutating,
+                                     dependent, approval-gated, and risky tasks stay
+                                     strictly sequential. Requires --orchestrated.
+       --parallel-workers <n>       Workers for a read-only parallel batch (2 default,
+                                      1-8). Requires --parallel-readonly.
+       --orchestrated-metrics        With --orchestrated/--orchestrated-once, print native
+                                      observability/benchmarking: per-task and per-batch
+                                      timing, concurrency, provider token/tool usage, and
+                                      effective speedup.
+       --metrics-json <path>        With --orchestrated/--orchestrated-once, also write
+                                      the full metrics object to <path> as JSON.
+       --json                        Emit preview as machine-readable JSON
 `)
 	return err
 }
