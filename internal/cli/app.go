@@ -363,6 +363,10 @@ func runWithDeps(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 		return runConfig(args[1:], stdout, stderr, deps)
 	case "models":
 		return runModels(args[1:], stdout, stderr)
+	case "route-preview":
+		return runRoutePreview(args[1:], stdout, stderr, deps)
+	case "plan-preview":
+		return runPlanPreview(args[1:], stdout, stderr, deps)
 	case "providers":
 		return runProviders(args[1:], stdout, stderr, deps)
 	case "doctor":
@@ -1138,6 +1142,8 @@ Commands:
   setup      Guide first-run provider setup
   config     Inspect resolved Go configuration without leaking secrets
   models     List Zero model registry entries
+  route-preview  Preview task classification and model-router decisions (local, dry-run)
+  plan-preview   Preview classification, planning, scheduler state, and per-task routing (local, dry-run)
   providers  Inspect resolved provider profiles
   doctor     Run backend health checks for config and provider setup
   context    Report workspace context budget usage
