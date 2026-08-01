@@ -323,6 +323,48 @@ type SwarmConfig struct {
 }
 
 // ProfilesConfig gates the execution-profile catalog.
+// PlanModelsConfig pins or forbids models for a plan's tasks. Every field is
+// optional; an empty config leaves the automatic choice untouched.
+type PlanModelsConfig struct {
+	// Scan / Implement / Verify pin a model per task role. A pinned role skips
+	// discovery entirely, so it works on a provider that reports no prices —
+	// which is most of them.
+	Scan      string `json:"scan,omitempty"`
+	Implement string `json:"implement,omitempty"`
+	Verify    string `json:"verify,omitempty"`
+	// Router names the model that DECIDES which model runs each task, by reading
+	// the task text instead of matching verbs. Empty uses the strongest model
+	// discovery found. It costs one extra call on that model before the plan
+	// starts, which is why a plan too small to benefit skips it and why every
+	// way it can fail falls back to the keyword classifier.
+	Router string `json:"router,omitempty"`
+	// RouterGuidance is your own advice to the router, in plain words, added to
+	// the built-in guidance rather than replacing it.
+	//
+	// It exists because the code cannot know your models. Price is the only
+	// ordering discovery gives, and on real accounts it lies in both directions:
+	// one provider's most expensive model was a build preview that failed every
+	// task it touched, another reports no prices at all so the ranking collapses
+	// to alphabetical. You know which model reasons well and which is quick and
+	// shallow; this is where you say so, once, instead of per prompt.
+	//
+	// Example: "kimi-k2.6 is the best reasoner here — prefer it for judgements.
+	// qwen3.5:397b is slow; use it only when correctness really matters."
+	RouterGuidance string `json:"routerGuidance,omitempty"`
+	// AutoAssign turns per-task model selection on for EVERY plan, so it does not
+	// have to be asked for in each prompt.
+	//
+	// The tool argument still wins when a plan supplies one, so a plan can say
+	// auto_assign:false and be believed. Absent from config it stays off: turning
+	// it on changes which model does the work and what a plan costs, and that is
+	// a decision for the person paying, made once here rather than inferred.
+	AutoAssign bool `json:"autoAssign,omitempty"`
+	// Exclude removes models from every tier by exact id. For the ones that are
+	// eligible on paper and wrong in practice: an image model that ranks highest
+	// on price, or a preview build that should not be judging anything.
+	Exclude []string `json:"exclude,omitempty"`
+}
+
 type ProfilesConfig struct {
 	// DisableZeromaxing turns the zeromaxing posture off for this workspace, so
 	// /effort zeromaxing, /profile zeromaxing and --exec-profile zeromaxing are
@@ -343,6 +385,22 @@ type ProfilesConfig struct {
 	// is disable-only: a cloned repo must not be able to raise a cost ceiling for
 	// whoever opens it. See mergeProjectConfig.
 	PlanSize string `json:"planSize,omitempty"`
+	// PlanModels states which models a plan's tasks may run on, overriding the
+	// automatic choice auto_assign would make from provider discovery.
+	//
+	// It exists because the automatic choice ranks by PRICE, and price is a proxy
+	// that fails in both directions on real accounts: an xAI account put a build
+	// preview on the verify tier because it was the most expensive thing there,
+	// and an Ollama account reports no prices at all, so the ranking collapses to
+	// alphabetical order. Neither is fixable with a better heuristic — the person
+	// with the account knows which model is strongest and the code does not.
+	//
+	// PROJECT CONFIG MAY ONLY EXCLUDE, never pin — see mergeProjectConfig. An
+	// exclusion removes a candidate and can only lower what a plan spends; a pin
+	// is the opposite, and a cloned repo pinning all three roles to the priciest
+	// model on the account would raise cost for whoever opened it. That is the
+	// same hazard PlanSize and DisableZeromaxing guard against.
+	PlanModels PlanModelsConfig `json:"planModels,omitempty"`
 }
 
 func (cfg *ToolsConfig) UnmarshalJSON(data []byte) error {

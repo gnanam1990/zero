@@ -266,6 +266,34 @@ func mergeConfig(dst *FileConfig, src FileConfig) {
 	if size, err := ParsePlanSize(src.Profiles.PlanSize); err == nil && strings.TrimSpace(src.Profiles.PlanSize) != "" {
 		dst.Profiles.PlanSize = string(size)
 	}
+	// PlanModels: USER config may set anything. Each field is presence-checked
+	// on its own so a config setting only `verify` does not blank the other two.
+	if v := strings.TrimSpace(src.Profiles.PlanModels.Scan); v != "" {
+		dst.Profiles.PlanModels.Scan = v
+	}
+	if v := strings.TrimSpace(src.Profiles.PlanModels.Implement); v != "" {
+		dst.Profiles.PlanModels.Implement = v
+	}
+	if v := strings.TrimSpace(src.Profiles.PlanModels.Verify); v != "" {
+		dst.Profiles.PlanModels.Verify = v
+	}
+	if v := strings.TrimSpace(src.Profiles.PlanModels.Router); v != "" {
+		dst.Profiles.PlanModels.Router = v
+	}
+	// User config only, like the pins: guidance steers which model does the work
+	// and therefore what a plan costs, so a cloned repo must not be able to write
+	// it. mergeProjectConfig deliberately does not carry this.
+	if v := strings.TrimSpace(src.Profiles.PlanModels.RouterGuidance); v != "" {
+		dst.Profiles.PlanModels.RouterGuidance = v
+	}
+	if len(src.Profiles.PlanModels.Exclude) > 0 {
+		dst.Profiles.PlanModels.Exclude = append([]string(nil), src.Profiles.PlanModels.Exclude...)
+	}
+	// Presence-only, like DisableZeromaxing: with omitempty a false is
+	// indistinguishable from absent, so turning it back off means removing the key.
+	if src.Profiles.PlanModels.AutoAssign {
+		dst.Profiles.PlanModels.AutoAssign = true
+	}
 	if src.Preferences.FavoriteModels != nil {
 		dst.Preferences.FavoriteModels = normalizeFavoriteModels(src.Preferences.FavoriteModels)
 	}
@@ -358,6 +386,16 @@ func mergeProjectConfig(dst *FileConfig, src FileConfig) error {
 	// privilege, which is not a malformed config.
 	//
 	// An unknown tier ranks tightest (rank -1) and so can never win here either.
+	// PlanModels from project config may only EXCLUDE, never pin.
+	//
+	// Excluding removes a candidate and can only ever lower what a plan spends.
+	// A PIN is the opposite: a cloned repo pinning all three roles to the
+	// priciest model on the account would raise cost for whoever opened it,
+	// which is exactly what the PlanSize rule below exists to prevent. Same
+	// hazard, same answer.
+	if len(src.Profiles.PlanModels.Exclude) > 0 {
+		dst.Profiles.PlanModels.Exclude = append(dst.Profiles.PlanModels.Exclude, src.Profiles.PlanModels.Exclude...)
+	}
 	if strings.TrimSpace(src.Profiles.PlanSize) != "" {
 		if size, err := ParsePlanSize(src.Profiles.PlanSize); err == nil {
 			if size.rank() < dst.Profiles.PlanSizeTier().rank() {
