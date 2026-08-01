@@ -315,8 +315,26 @@ func mergeProjectConfig(dst *FileConfig, src FileConfig) error {
 	if activeProvider := strings.TrimSpace(src.ActiveProvider); activeProvider != "" {
 		dst.ActiveProvider = activeProvider
 	}
+	// PROJECT CONFIG MAY ONLY TIGHTEN THE TURN BUDGET.
+	//
+	// A cloned repo setting maxTurns to the ceiling raises the per-run cost for
+	// whoever opens it — the same hazard PlanSize and DisableZeromaxing are
+	// tighten-only for, three fields below. User config stays free to raise: it
+	// is the user's own file and their own money.
+	//
+	// COMPARED AGAINST THE EFFECTIVE VALUE, NOT THE FIELD. Zero here does not
+	// mean "no limit", it means "fall back to defaultMaxTurns" — and that
+	// fallback happens after this merge. Treating zero as unbounded lets a repo
+	// raise 80 to 500 for every user who never wrote a config, which is the
+	// common case and the one this rule exists for.
 	if src.MaxTurns > 0 {
-		dst.MaxTurns = src.MaxTurns
+		effective := dst.MaxTurns
+		if effective == 0 {
+			effective = defaultMaxTurns
+		}
+		if src.MaxTurns < effective {
+			dst.MaxTurns = src.MaxTurns
+		}
 	}
 	for _, provider := range src.Providers {
 		candidate := providerMergeCandidate(*dst, provider)
