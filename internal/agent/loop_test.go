@@ -3831,6 +3831,7 @@ func TestRunPreservesRequestPrefixAcrossTurnsUnderZeromaxing(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		ZeromaxingEnterNotice, ZeromaxingBudgetNotice, ZeromaxingStillOnNotice, ZeromaxingExitNotice,
+		ZeromaxingEvidenceNotice, ZeromaxingOrchestrateNotice,
 	} {
 		if strings.Contains(system.Content, forbidden) {
 			t.Fatalf("posture reminder leaked into the SYSTEM PROMPT (above the cache breakpoint): %q", forbidden)
@@ -3872,6 +3873,7 @@ func TestRunWithoutZeromaxingCarriesNoPostureText(t *testing.T) {
 	rendered := renderZeromaxingMessages(provider.requests[0].Messages)
 	for _, forbidden := range []string{
 		ZeromaxingEnterNotice, ZeromaxingBudgetNotice, ZeromaxingStillOnNotice, ZeromaxingExitNotice,
+		ZeromaxingEvidenceNotice, ZeromaxingOrchestrateNotice,
 	} {
 		if strings.Contains(rendered, forbidden) {
 			t.Fatalf("a posture-free run must carry no posture text, found %q", forbidden)
