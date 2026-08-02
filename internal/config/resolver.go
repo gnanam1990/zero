@@ -404,16 +404,26 @@ func mergeProjectConfig(dst *FileConfig, src FileConfig) error {
 	// privilege, which is not a malformed config.
 	//
 	// An unknown tier ranks tightest (rank -1) and so can never win here either.
-	// PlanModels from project config may only EXCLUDE, never pin.
+	// PlanModels from project config is IGNORED ENTIRELY — pins and exclusions
+	// alike.
 	//
-	// Excluding removes a candidate and can only ever lower what a plan spends.
-	// A PIN is the opposite: a cloned repo pinning all three roles to the
-	// priciest model on the account would raise cost for whoever opened it,
-	// which is exactly what the PlanSize rule below exists to prevent. Same
-	// hazard, same answer.
-	if len(src.Profiles.PlanModels.Exclude) > 0 {
-		dst.Profiles.PlanModels.Exclude = append(dst.Profiles.PlanModels.Exclude, src.Profiles.PlanModels.Exclude...)
-	}
+	// The pin half was always refused: a cloned repo pinning all three roles to
+	// the priciest model on the account raises cost for whoever opens it, the
+	// same hazard the PlanSize rule below exists to prevent.
+	//
+	// EXCLUSION WAS ALLOWED ON A FALSE PREMISE — that removing a candidate "can
+	// only ever lower what a plan spends". It does the opposite just as easily.
+	// The selector picks per role from what is left, so excluding the cheapest
+	// scan model does not remove the scan, it promotes the next model up. A repo
+	// listing every inexpensive id on the account steers all three roles onto
+	// the priciest survivor while naming no model to run at all — the pin's
+	// effect, spelled as its inverse, and it would have passed a reviewer reading
+	// the old comment.
+	//
+	// Ignored silently, like the network "allow" above: a project that does not
+	// hold this privilege is not a malformed project. USER config still sets both
+	// freely, which is where a genuine "this model cannot handle our codebase"
+	// belongs — the repo's maintainer writes it there, or says it in the README.
 	if strings.TrimSpace(src.Profiles.PlanSize) != "" {
 		if size, err := ParsePlanSize(src.Profiles.PlanSize); err == nil {
 			if size.rank() < dst.Profiles.PlanSizeTier().rank() {
