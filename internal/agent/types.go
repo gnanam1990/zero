@@ -299,6 +299,19 @@ type Options struct {
 	// nil for text-only runs (the seeded message then carries no images, exactly
 	// as before).
 	Images []zeroruntime.ImageBlock
+	// MaxTokens bounds what a whole run may SPEND, in provider-reported tokens.
+	// 0 is unbounded, which is every caller that does not set it.
+	//
+	// MaxTurns IS NOT A COST BOUND, and treating it as one is how a run ends at
+	// an arbitrary place. A cheap run reaches 320 turns having spent ~3M tokens; a
+	// measured heavy run reached the same 320 having spent 35,781,390. The turn
+	// count bounds round trips, not spend, and the two diverge by an order of
+	// magnitude on exactly the runs worth bounding.
+	//
+	// Crossing it ends the run the same way MaxTurns does — one final call asking
+	// for a summary — so a budget expiry produces a written report of what was
+	// done rather than a run that simply stops.
+	MaxTokens int
 	// ContextWindow is the model's maximum input token budget. When > 0 the agent
 	// loop compacts long conversations once the estimated size crosses a fraction
 	// of this window. 0 DISABLES compaction entirely (every existing caller/test
