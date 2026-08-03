@@ -290,6 +290,10 @@ type Options struct {
 	ReasoningEffort string
 	Cwd             string
 	SystemPrompt    string
+	// userMessage is this turn's raw user text, set by Run from its prompt
+	// argument and forwarded to tools. Unexported: it is not a knob a caller
+	// sets, it is what the caller already passed as `prompt`.
+	userMessage string
 	// ResponseStyle is the operator-selected reply style from the TUI /style
 	// command (e.g. "concise", "explanatory", "review"). It is rendered into the
 	// system prompt as a short directive. Empty or "balanced" adds nothing — the

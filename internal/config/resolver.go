@@ -259,6 +259,14 @@ func mergeConfig(dst *FileConfig, src FileConfig) {
 	if src.Profiles.DisableZeromaxing {
 		dst.Profiles.DisableZeromaxing = true
 	}
+	// User config may enable either of these freely; both default off so a caller
+	// that sets neither is byte-identical to a build without them.
+	if src.Profiles.RequirePlanKeyword {
+		dst.Profiles.RequirePlanKeyword = true
+	}
+	if src.Profiles.Memory {
+		dst.Profiles.Memory = true
+	}
 	// User config is higher-trust and may set ANY tier, tighter or looser. An
 	// unrecognised value is ignored rather than stored, so a typo falls back to
 	// the default instead of being carried around as a value every reader has to
@@ -395,6 +403,19 @@ func mergeProjectConfig(dst *FileConfig, src FileConfig) error {
 	if src.Profiles.DisableZeromaxing {
 		dst.Profiles.DisableZeromaxing = true
 	}
+	// RequirePlanKeyword from project config may only ENABLE. Turning a safety
+	// gate ON is tightening and a repo may reasonably ask for it; turning it OFF
+	// is a downgrade, and presence-only means an attempted "false" is simply not
+	// there to act on — the same shape as DisableZeromaxing above.
+	if src.Profiles.RequirePlanKeyword {
+		dst.Profiles.RequirePlanKeyword = true
+	}
+	// Profiles.Memory is IGNORED here, deliberately. memory_write is a write
+	// primitive pointed at the workspace, and project config is not trust-gated:
+	// a cloned repo must not be able to hand the agent a new way to write into
+	// it. User config still enables it freely, which is where that decision
+	// belongs.
+	//
 	// Profiles.PlanSize from project config may only TIGHTEN. A cloned repo can
 	// ask for a smaller ceiling; it cannot raise one, because raising it is
 	// raising a spend ceiling for whoever opens the repo — the same privilege

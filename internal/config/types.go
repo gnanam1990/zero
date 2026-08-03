@@ -385,6 +385,29 @@ type ProfilesConfig struct {
 	// is disable-only: a cloned repo must not be able to raise a cost ceiling for
 	// whoever opens it. See mergeProjectConfig.
 	PlanSize string `json:"planSize,omitempty"`
+	// RequirePlanKeyword makes the orchestrate tool refuse a plan unless the
+	// turn's own user text asks for one ("run a plan for ...", "fan out ...").
+	//
+	// Off by default, and that is a real trade. Once the posture is on the tool
+	// exists for the rest of the session, and everything the model reads shares
+	// context with the user's instructions — file contents, PR comments, MCP
+	// output. An imperative sentence in any of them reads like an instruction to
+	// the tool that spends the most. On by default would refuse a plan for every
+	// user whose phrasing happens not to match, which is the call this codebase
+	// already made for auto_assign.
+	//
+	// Project config may only ENABLE it, never switch it back off: turning a
+	// safety gate off is a downgrade a cloned repo must not be able to make for
+	// whoever opens it. See mergeProjectConfig.
+	RequirePlanKeyword bool `json:"requirePlanKeyword,omitempty"`
+	// Memory enables the durable note store: the `memory` and `memory_write`
+	// tools, reading and writing .zero/memory.
+	//
+	// USER CONFIG ONLY. memory_write is a write primitive pointed at the
+	// workspace, and project config is not trust-gated — a cloned repo must not
+	// be able to hand the agent a new way to write into it. mergeProjectConfig
+	// ignores this field entirely, the same answer PlanModels gets.
+	Memory bool `json:"memory,omitempty"`
 	// PlanModels states which models a plan's tasks may run on, overriding the
 	// automatic choice auto_assign would make from provider discovery.
 	//
