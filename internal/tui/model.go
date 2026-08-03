@@ -24,6 +24,7 @@ import (
 	internalmcp "github.com/Gitlawb/zero/internal/mcp"
 	"github.com/Gitlawb/zero/internal/modelregistry"
 	"github.com/Gitlawb/zero/internal/notify"
+	"github.com/Gitlawb/zero/internal/providercatalog"
 	"github.com/Gitlawb/zero/internal/providerhealth"
 	"github.com/Gitlawb/zero/internal/providermodeldiscovery"
 	"github.com/Gitlawb/zero/internal/providers/providerio"
@@ -5348,6 +5349,11 @@ func (m model) runAgentWithOptions(runID int, runCtx context.Context, prompt str
 		options.SessionID = m.activeSession.SessionID
 		options.ProviderName = m.providerName
 		options.Model = m.modelName
+		// FROM THE LIVE PROFILE, not the one captured at startup. /model can
+		// switch provider mid-session, and a family resolved once at launch would
+		// keep describing the provider the session began on — the same staleness
+		// that had plan discovery assigning from the wrong provider's model list.
+		options.ModelFamily = providercatalog.ModelFamilyFor(m.providerProfile.CatalogID)
 		options.ReasoningEffort = string(m.reasoningEffort)
 		options.ResponseStyle = m.responseStyle
 		options.Cwd = m.cwd

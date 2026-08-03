@@ -161,7 +161,7 @@ func buildSystemPromptParts(options Options) systemPromptParts {
 		core = fallbackSystemPrompt
 	}
 	sections := []string{core}
-	if addendum := modelPromptAddendum(options.Model); addendum != "" {
+	if addendum := modelPromptAddendum(options.ModelFamily, options.Model); addendum != "" {
 		sections = append(sections, addendum)
 	}
 	if session := sessionRuntimeContext(options); session != "" {

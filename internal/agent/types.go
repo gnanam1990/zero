@@ -280,9 +280,16 @@ type Options struct {
 	SessionTitle     string
 	ProviderName     string
 	Model            string
-	ReasoningEffort  string
-	Cwd              string
-	SystemPrompt     string
+	// ModelFamily is the family the PROVIDER declares it serves, from the
+	// provider catalog — "openai", "anthropic", "gemini", or "" when the provider
+	// is a gateway serving several and cannot answer. Empty falls back to
+	// classifying the model id, which is a guess that matches nothing for most of
+	// the catalog. Prompt tuning only; it selects the family addendum and nothing
+	// else.
+	ModelFamily     string
+	ReasoningEffort string
+	Cwd             string
+	SystemPrompt    string
 	// ResponseStyle is the operator-selected reply style from the TUI /style
 	// command (e.g. "concise", "explanatory", "review"). It is rendered into the
 	// system prompt as a short directive. Empty or "balanced" adds nothing — the
