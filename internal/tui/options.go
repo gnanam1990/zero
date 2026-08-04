@@ -22,18 +22,21 @@ import (
 
 // Options configures the reusable Zero terminal UI shell.
 type Options struct {
-	Cwd                         string
-	Version                     string // CLI build version, shown on the home screen; empty hides it
-	UserConfigPath              string
-	DoctorUserConfigPath        string
-	ProjectConfigPath           string
-	ProviderName                string
-	ModelName                   string
-	ProviderProfile             config.ProviderProfile
-	SavedProviders              []config.ProviderProfile // all configured providers, for the /model multi-provider list
-	FavoriteModels              []string
-	RecentModels                []config.RecentModelEntry
-	RecapsEnabled               bool
+	Cwd                  string
+	Version              string // CLI build version, shown on the home screen; empty hides it
+	UserConfigPath       string
+	DoctorUserConfigPath string
+	ProjectConfigPath    string
+	ProviderName         string
+	ModelName            string
+	ProviderProfile      config.ProviderProfile
+	SavedProviders       []config.ProviderProfile // all configured providers, for the /model multi-provider list
+	FavoriteModels       []string
+	RecentModels         []config.RecentModelEntry
+	RecapsEnabled        bool
+	// KeepFinishedAgents seeds showDoneAgents so finished sub-agents stay in the
+	// AGENTS panel from the first render, without a click.
+	KeepFinishedAgents          bool
 	Provider                    zeroruntime.Provider
 	NewProvider                 func(config.ProviderProfile) (zeroruntime.Provider, error)
 	ProbeProviderHealth         func(context.Context, providerhealth.Options) providerhealth.Result

@@ -116,6 +116,17 @@ type PreferencesConfig struct {
 	// the user turned idle recaps off. A *bool is its own tri-state, so no
 	// custom unmarshal is needed (unlike ToolsConfig.DeferThreshold's int).
 	Recaps *bool `json:"recaps,omitempty"`
+	// KeepFinishedAgents makes the AGENTS panel KEEP finished sub-agents instead
+	// of dropping them 1.5s after they complete.
+	//
+	// The drop is the default (PR #345, "agents never disappear"), and the panel
+	// has a click-to-toggle to override it per session — but the toggle resets
+	// every session. This is the standing preference: set true and finished
+	// agents stay for the whole session, every session, without clicking.
+	//
+	// A *bool tri-state like Recaps: nil is unset (the drop-after-linger
+	// default), true keeps them, false is the explicit drop.
+	KeepFinishedAgents *bool `json:"keepFinishedAgents,omitempty"`
 }
 
 // RecentModelEntry is one provider-qualified model selection recorded in
@@ -133,6 +144,15 @@ const MaxRecentModels = 5
 // RecapsEnabled reports whether idle recaps are on. Unset defaults to ON.
 func (p PreferencesConfig) RecapsEnabled() bool {
 	return p.Recaps == nil || *p.Recaps
+}
+
+// KeepsFinishedAgents reports the standing preference for the AGENTS panel.
+//
+// Defaults FALSE, unlike RecapsEnabled which defaults true: dropping finished
+// agents after a linger is the established product default (PR #345), so an
+// unset preference keeps it. Only an explicit true makes them stay.
+func (p PreferencesConfig) KeepsFinishedAgents() bool {
+	return p.KeepFinishedAgents != nil && *p.KeepFinishedAgents
 }
 
 // KeyBindingDef defines one key binding string (e.g. "ctrl+o") that the TUI
@@ -363,6 +383,17 @@ type PlanModelsConfig struct {
 	// eligible on paper and wrong in practice: an image model that ranks highest
 	// on price, or a preview build that should not be judging anything.
 	Exclude []string `json:"exclude,omitempty"`
+	// MinSize is the smallest model, in BILLIONS of parameters, worth routing a
+	// task to. A provider that lists tiny models (a 135M or 1B toy) alongside
+	// decent ones would otherwise see the toy chosen as the "cheapest" tier for a
+	// scan; this floor drops any model KNOWN to be smaller, so a task lands on a
+	// decent model instead. Size is read from the model id ("qwen3-coder:480b").
+	//
+	// A model whose id names no size is NOT dropped — an unknown size is not
+	// evidence of a small one, and most cloud ids carry none. And if the floor
+	// would leave a provider with no models at all, it is ignored: a plan running
+	// on a small model beats a plan that cannot run. 0 means no floor.
+	MinSize float64 `json:"minSize,omitempty"`
 }
 
 type ProfilesConfig struct {

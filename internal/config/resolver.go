@@ -297,6 +297,12 @@ func mergeConfig(dst *FileConfig, src FileConfig) {
 	if len(src.Profiles.PlanModels.Exclude) > 0 {
 		dst.Profiles.PlanModels.Exclude = append([]string(nil), src.Profiles.PlanModels.Exclude...)
 	}
+	// User config only, like the pins and guidance: a size floor decides which
+	// models do the work and therefore what a plan costs, so a cloned repo must
+	// not set it. A positive value overrides; 0 or negative is "unset".
+	if src.Profiles.PlanModels.MinSize > 0 {
+		dst.Profiles.PlanModels.MinSize = src.Profiles.PlanModels.MinSize
+	}
 	// Presence-only, like DisableZeromaxing: with omitempty a false is
 	// indistinguishable from absent, so turning it back off means removing the key.
 	if src.Profiles.PlanModels.AutoAssign {

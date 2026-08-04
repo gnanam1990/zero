@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -690,6 +691,11 @@ type specialistStartMsg struct {
 	name           string
 	description    string
 	childSessionID string
+	// model is what the child is EXPECTED to run on — the session's own, since
+	// a Task sub-agent inherits it unless its manifest names another. Shown
+	// while the agent runs, and corrected from the result's Meta["model"] when
+	// it finishes, which is the authoritative answer.
+	model string
 }
 
 // specialistCompleteMsg carries specialist completion info from the
@@ -700,6 +706,24 @@ type specialistCompleteMsg struct {
 	childSessionID string
 	status         specialistStatus
 	errorMsg       string
+	// model is what the child actually ran on, from the executor's own
+	// resolution. Empty leaves whatever the start message showed.
+	model string
+}
+
+// specialistRebindMsg rebinds a running specialist row from its temporary
+// tool-call key to the id later events will use, WITHOUT completing it.
+//
+// A BACKGROUND SPAWN NEEDS THIS AND A FOREGROUND ONE DOES NOT. A foreground
+// Task reconciles inside its completion, which fires when the child finishes. A
+// background Task returns immediately with a task_id and finishes later via a
+// TaskOutput poll keyed on THAT id — but the row is still keyed on the tool call
+// id, so the poll's completion never finds it and the row runs forever. This
+// rebinds the key the moment the spawn returns, so the later completion lands.
+type specialistRebindMsg struct {
+	runID   int
+	fromKey string
+	toKey   string
 }
 
 // swarmSessionsMsg carries swarm task_id -> member session_id pairs (from
@@ -717,6 +741,33 @@ type specialistProgressMsg struct {
 	toolCallID string
 	toolName   string
 	detail     string
+}
+
+// specialistUsageMsg carries a running child's LIVE token spend, so the AGENTS
+// row shows what it costs WHILE it works — not only after. Bridged from the
+// child's EventUsage, which OnToolProgress previously ignored, which is why a
+// Task sub-agent's card sat at zero tokens for its whole life.
+type specialistUsageMsg struct {
+	runID       int
+	toolCallID  string
+	totalTokens int
+}
+
+// specialistTotalTokensMsg carries a background child's RUNNING TOTAL from a
+// TaskOutput poll — a whole number, not a per-turn delta, so it SETS rather than
+// adds. A detached child cannot stream per-turn usage; the poll is all it has.
+type specialistTotalTokensMsg struct {
+	runID       int
+	toolCallID  string
+	totalTokens int
+}
+
+// specialistToolCountMsg carries a background child's tool-call count from a
+// poll, likewise a total that sets rather than increments.
+type specialistToolCountMsg struct {
+	runID      int
+	toolCallID string
+	tools      int
 }
 
 type mcpCommandOrigin int
@@ -931,6 +982,7 @@ func newModel(ctx context.Context, options Options) model {
 		favoriteModels:              favoriteModelSet(options.FavoriteModels),
 		recentModels:                normalizeRecentModelEntries(options.RecentModels),
 		recapsEnabled:               options.RecapsEnabled,
+		showDoneAgents:              options.KeepFinishedAgents,
 		provider:                    options.Provider,
 		newProvider:                 options.NewProvider,
 		probeProviderHealth:         options.ProbeProviderHealth,
@@ -2682,6 +2734,18 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.specialists.start(msg.name, msg.description, msg.childSessionID, m.now())
+		// SHOWN WHILE IT RUNS. The sidebar renders "on <model>" and had nothing
+		// to render for a Task sub-agent: setModel was reached from the plan
+		// path alone, so a delegated agent named no model for its whole life.
+		m.specialists.setModel(msg.childSessionID, msg.model)
+		return m, nil
+	case specialistRebindMsg:
+		if msg.runID != m.activeRunID {
+			return m, nil
+		}
+		if msg.fromKey != "" && msg.toKey != "" && msg.fromKey != msg.toKey {
+			m.specialists.reconcileSessionID(msg.fromKey, msg.toKey)
+		}
 		return m, nil
 	case specialistCompleteMsg:
 		if msg.runID != m.activeRunID {
@@ -2693,6 +2757,12 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// entry's childSessionID to the real session ID so subchat.enter can
 		// find the child session's events in the store.
 		m.specialists.complete(msg.toolCallID, msg.status, 0, msg.errorMsg, m.now())
+		// CORRECTED, not merely set: a specialist whose manifest names its own
+		// model did not run on the session's, and the row seeded at start would
+		// keep naming the wrong one. Empty leaves the seed alone.
+		if msg.model != "" {
+			m.specialists.setModel(msg.toolCallID, msg.model)
+		}
 		if msg.childSessionID != "" && msg.childSessionID != msg.toolCallID {
 			m.specialists.reconcileSessionID(msg.toolCallID, msg.childSessionID)
 		}
@@ -2818,6 +2888,24 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// guess, which is the whole point of the message existing.
 		m.specialists.incrementToolCount(msg.cardKey)
 		m.specialists.setCurrentTool(msg.cardKey, msg.toolName, msg.detail)
+		return m, nil
+	case specialistUsageMsg:
+		if msg.runID != m.activeRunID {
+			return m, nil
+		}
+		m.specialists.addTokens(msg.toolCallID, msg.totalTokens)
+		return m, nil
+	case specialistTotalTokensMsg:
+		if msg.runID != m.activeRunID {
+			return m, nil
+		}
+		m.specialists.setTokens(msg.toolCallID, msg.totalTokens)
+		return m, nil
+	case specialistToolCountMsg:
+		if msg.runID != m.activeRunID {
+			return m, nil
+		}
+		m.specialists.setToolCount(msg.toolCallID, msg.tools)
 		return m, nil
 	case specialistProgressMsg:
 		if msg.runID != m.activeRunID {
@@ -4722,6 +4810,9 @@ func (m model) dispatchCommand(command parsedCommand) (tea.Model, tea.Cmd) {
 		// immediately, which is exactly what "stop the plan that is running
 		// right now" needs.
 		return m.handlePlansCommand(command.text)
+	case commandWorkers:
+		m.transcript = reduceTranscript(m.transcript, transcriptAction{kind: actionAppendSystem, text: m.workersText()})
+		return m, nil
 	case commandContext:
 		m.transcript = reduceTranscript(m.transcript, transcriptAction{kind: actionAppendSystem, text: m.contextText()})
 		return m, nil
@@ -5588,6 +5679,7 @@ func (m model) runAgentWithOptions(runID int, runCtx context.Context, prompt str
 						name:           name,
 						description:    desc,
 						childSessionID: call.ID,
+						model:          m.modelName,
 					})
 				}
 			}
@@ -5626,7 +5718,16 @@ func (m model) runAgentWithOptions(runID int, runCtx context.Context, prompt str
 		}
 
 		options.OnToolProgress = func(toolCallID string, event streamjson.Event) {
-			if event.Type == streamjson.EventToolCall && m.runtimeMessageSink != nil {
+			if m.runtimeMessageSink == nil {
+				return
+			}
+			if tokens, ok := specialistProgressTokens(event); ok {
+				// LIVE TOKEN SPEND. EventUsage was ignored here, so a Task
+				// sub-agent's card never moved off zero — the gap the tracker's
+				// setTokens comment named, and addTokens existed only in a test.
+				m.runtimeMessageSink(specialistUsageMsg{runID: runID, toolCallID: toolCallID, totalTokens: tokens})
+			}
+			if event.Type == streamjson.EventToolCall {
 				m.runtimeMessageSink(specialistProgressMsg{
 					runID:      runID,
 					toolCallID: toolCallID,
@@ -5693,8 +5794,28 @@ func (m model) runAgentWithOptions(runID int, runCtx context.Context, prompt str
 				Type:    sessions.EventToolResult,
 				Payload: toolPayload,
 			})
-			// Complete specialist tracking when the Task tool returns.
-			if result.Name == "Task" {
+			// A BACKGROUND SPAWN REBINDS ITS ROW KEY NOW. The row was keyed on
+			// the tool call id; the child's later TaskOutput completion is keyed
+			// on the task_id (the child session id). Without rebinding here the
+			// completion can never find the row, and it runs forever — the
+			// regression the suppression below created.
+			if from, to, ok := backgroundSpawnRebind(result.Name, result.ToolCallID, result.Meta); ok && m.runtimeMessageSink != nil {
+				m.runtimeMessageSink(specialistRebindMsg{runID: runID, fromKey: from, toKey: to})
+			}
+			// Complete specialist tracking when the Task tool returns —
+			// EXCEPT for a background spawn, which returns the moment the child
+			// is launched.
+			//
+			// Completing on that return reported work as finished that had not
+			// begun: four background workers rendered "✓ completed · 0 tool
+			// calls · 1s" and the header said "4 finished" while every one was
+			// still running, with no specialist_stop recorded for any of them.
+			// The same invariant as "never report failure as success" — a
+			// not-yet-started agent is not a finished one.
+			//
+			// A background agent completes below instead, when TaskOutput polls
+			// it and reports a terminal status.
+			if taskResultFinishesSpecialist(result.Name, result.Meta) {
 				status := specialistCompleted
 				if result.Status == tools.StatusError {
 					status = specialistError
@@ -5709,6 +5830,37 @@ func (m model) runAgentWithOptions(runID int, runCtx context.Context, prompt str
 						toolCallID:     result.ToolCallID,
 						childSessionID: childSessionID,
 						status:         status,
+						errorMsg:       result.Output,
+						// THE AUTHORITATIVE ANSWER. A specialist whose manifest
+						// names its own model did not run on the session's, and
+						// only the executor knows which applied.
+						model: result.Meta["model"],
+					})
+				}
+			}
+			// A POLLED BACKGROUND AGENT COMPLETES WHEN IT REALLY HAS. TaskOutput
+			// already carries task_id and status structurally, so this reads the
+			// status rather than the summary prose.
+			//
+			// AND IT CARRIES THE SPEND. A background child is detached and never
+			// streams via OnToolProgress, so the live token/tool bridge never
+			// sees it — its row sat at "0 tok · 0 tools" while the real numbers
+			// were recorded elsewhere. TaskOutput is its one channel, so the
+			// tokens and tool count ride the poll, on EVERY poll (not only the
+			// terminal one) so the row fills in while it is still running.
+			if update, ok := backgroundPollUpdate(result.Name, result.Meta); ok && m.runtimeMessageSink != nil {
+				if update.tokens > 0 {
+					m.runtimeMessageSink(specialistTotalTokensMsg{runID: runID, toolCallID: update.taskID, totalTokens: update.tokens})
+				}
+				if update.tools > 0 {
+					m.runtimeMessageSink(specialistToolCountMsg{runID: runID, toolCallID: update.taskID, tools: update.tools})
+				}
+				if update.done {
+					m.runtimeMessageSink(specialistCompleteMsg{
+						runID:          runID,
+						toolCallID:     update.taskID,
+						childSessionID: update.taskID,
+						status:         update.status,
 						errorMsg:       result.Output,
 					})
 				}
@@ -5917,4 +6069,106 @@ func toolResultRowText(result agent.ToolResult) string {
 		status = tools.StatusOK
 	}
 	return fmt.Sprintf("tool result: %s %s %s", result.Name, status, truncateTUIOutput(result.Output, tuiToolOutputLimit))
+}
+
+// backgroundAgentStatus maps a polled background task's status onto the
+// tracker's, and reports whether it is terminal at all.
+//
+// "running" is the case this exists for: polling an agent that is still working
+// must leave it running, not quietly mark it done. Anything unrecognised is
+// treated as still running for the same reason — the fail-safe direction is to
+// keep showing work as in flight until something says otherwise.
+func backgroundAgentStatus(raw string) (specialistStatus, bool) {
+	switch raw {
+	case "completed":
+		return specialistCompleted, true
+	case "error":
+		return specialistError, true
+	case "killed":
+		return specialistCancelled, true
+	default:
+		return specialistRunning, false
+	}
+}
+
+// taskResultFinishesSpecialist reports whether a Task tool result means the
+// sub-agent is DONE.
+//
+// A BACKGROUND SPAWN DOES NOT. Task returns the instant the child is launched,
+// so completing on that return reported work as finished that had not begun:
+// four background workers rendered "✓ completed · 0 tool calls · 1s" with the
+// header reading "4 finished" while all four were still running. Those agents
+// finish via backgroundAgentStatus instead, when a TaskOutput poll reports a
+// terminal status.
+//
+// NAMED rather than left inline so the rule is one greppable thing with one
+// test, instead of a condition anyone can quietly widen back.
+func taskResultFinishesSpecialist(name string, meta map[string]string) bool {
+	return name == "Task" && meta["background"] != "true"
+}
+
+// backgroundSpawnRebind reports the key rebind a background Task spawn needs, if
+// any: from the tool-call id the row was registered under, to the task_id its
+// later TaskOutput completion will target.
+//
+// NAMED so the rule has one greppable definition and a test — the emission
+// itself lives inside runAgentWithOptions, which runs a full agent loop and is
+// not unit-driven, so this predicate is what a test can hold. Empty toolCallID
+// or a task_id equal to it means no rebind: a foreground Task, or a spawn whose
+// ids already agree.
+func backgroundSpawnRebind(name, toolCallID string, meta map[string]string) (from, to string, ok bool) {
+	if name != "Task" || meta["background"] != "true" {
+		return "", "", false
+	}
+	taskID := meta["task_id"]
+	if taskID == "" || taskID == toolCallID {
+		return "", "", false
+	}
+	return toolCallID, taskID, true
+}
+
+// specialistProgressTokens reports a child progress event's live token spend, if
+// it carries one. Named so the EventUsage bridge has a test — the OnToolProgress
+// callback lives inside runAgentWithOptions, a full agent loop that is not
+// unit-driven, so this predicate is what a test can hold.
+func specialistProgressTokens(event streamjson.Event) (int, bool) {
+	if event.Type != streamjson.EventUsage || event.TotalTokens == nil || *event.TotalTokens <= 0 {
+		return 0, false
+	}
+	return *event.TotalTokens, true
+}
+
+// backgroundPollUpdate parses a TaskOutput result into the AGENTS-panel updates
+// a poll carries: a background child's running token total, tool count, and — if
+// terminal — its completion.
+//
+// NAMED so the poll bridge has a test. The emit itself is in runAgentWithOptions
+// (a full agent loop, not unit-driven), so this predicate is what a mutation
+// check can hold. ok is false for anything that is not a TaskOutput carrying a
+// task id.
+type backgroundPoll struct {
+	taskID string
+	tokens int
+	tools  int
+	done   bool
+	status specialistStatus
+}
+
+func backgroundPollUpdate(toolName string, meta map[string]string) (backgroundPoll, bool) {
+	if toolName != "TaskOutput" {
+		return backgroundPoll{}, false
+	}
+	taskID := meta["task_id"]
+	if taskID == "" {
+		return backgroundPoll{}, false
+	}
+	update := backgroundPoll{taskID: taskID}
+	if tokens, err := strconv.Atoi(meta["tokens"]); err == nil && tokens > 0 {
+		update.tokens = tokens
+	}
+	if tools, err := strconv.Atoi(meta["tools"]); err == nil && tools > 0 {
+		update.tools = tools
+	}
+	update.status, update.done = backgroundAgentStatus(meta["status"])
+	return update, true
 }
