@@ -3230,7 +3230,7 @@ func (m model) twoColumnTranscriptView() string {
 	chatBlock := viewLines(m.scrollableTranscriptItemsView(header, bodyItems, footer, width, overlayForViewport))
 
 	sidebar := m.renderContextSidebar(sidebarW, len(chatBlock))
-	rows := joinColumns(chatBlock, sidebar, chatW, sidebarW)
+	rows := joinColumnsWith(chatBlock, sidebar, chatW, sidebarW, m.postureDivider)
 	return strings.Join(rows, "\n")
 }
 
@@ -3826,7 +3826,7 @@ func (m model) workingStatusLine() string {
 	// wave moving one character per spinner tick (shared m.spinnerPhase clock). A
 	// 6-char wavelength fits the 7-letter word so a full oscillation is visible.
 	// Under reduced motion the phase is frozen, so this renders a static gradient.
-	working := rippleText("Working", ripplePalette(), m.spinnerPhase, 6)
+	working := rippleText("Working", m.postureRipplePalette(), m.spinnerPhase, m.postureRippleWaveLen())
 	line := zeroTheme.accent.Render(m.spinnerGlyph()) + " " + working
 	// Phase label so a long, output-less step reads as live progress rather than a
 	// frozen screen: "writing" while the answer streams, "thinking" otherwise
@@ -4354,18 +4354,18 @@ func (m model) composerBox(width int) string {
 	lines := strings.Split(content, "\n")
 
 	rendered := make([]string, 0, len(lines)+3)
-	rendered = append(rendered, zeroTheme.lineStrong.Render("╭"+strings.Repeat("─", width-2)+"╮"))
+	rendered = append(rendered, m.postureComposerTop(width))
 	// Attachment chips ([Image #1] …) render INSIDE the box, above the input line,
 	// instead of as a separate row above the box.
 	if chips := renderAttachmentChips(m.pendingImageLabels, m.pendingDocuments); chips != "" {
 		fitted := fitStyledLine(zeroTheme.muted.Render(chips), innerWidth)
 		pad := strings.Repeat(" ", maxInt(0, innerWidth-lipgloss.Width(fitted)))
-		rendered = append(rendered, zeroTheme.lineStrong.Render("│ ")+fitted+pad+zeroTheme.lineStrong.Render(" │"))
+		rendered = append(rendered, m.postureComposerSide(false)+fitted+pad+m.postureComposerSide(true))
 	}
 	for _, line := range lines {
 		fitted := fitStyledLine(line, innerWidth)
 		pad := strings.Repeat(" ", maxInt(0, innerWidth-lipgloss.Width(fitted)))
-		rendered = append(rendered, zeroTheme.lineStrong.Render("│ ")+fitted+pad+zeroTheme.lineStrong.Render(" │"))
+		rendered = append(rendered, m.postureComposerSide(false)+fitted+pad+m.postureComposerSide(true))
 	}
 	rendered = append(rendered, m.composerDividerLine(width))
 	return strings.Join(rendered, "\n")
@@ -5357,6 +5357,13 @@ func (m *model) cancelRun() {
 	m.cancelConfirmActive = false    // whatever path got here, there's nothing left to confirm cancelling
 	m.plan.frozenAt = m.now()        // freeze the plan clock while idle (no run in flight)
 	m.orchestrate.frozenAt = m.now() // and the orchestrate panel's, for the same reason
+	// THE TRACKERS MUST AGREE WITH THE CANCEL. The children die with the run
+	// context, but a specialist row left specialistRunning keeps its spinner,
+	// its ticking clock and its "live" mark in MODELS forever — "Run cancelled."
+	// in the transcript beside agents that look like they are still working. An
+	// orchestrate task left orchestrateRunning does the same to the PLAN bar.
+	m.specialists.cancelRunning(m.now())
+	m.orchestrate.cancelRunning(m.now())
 	m.pendingPermission = nil
 	m.pendingAskUser = nil
 	// The interim block renders streamingText live; a cancelled run's partial

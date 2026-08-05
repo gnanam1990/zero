@@ -173,13 +173,15 @@ func (m model) composerDividerLine(width int) string {
 	meta := zeroTheme.muted.Render(model)
 	metaWidth := lipgloss.Width(meta)
 	if width < 8 {
-		return zeroTheme.lineStrong.Render(strings.Repeat("─", width))
+		return m.postureBoxRule(strings.Repeat("─", width), 0, width)
 	}
 	if width < metaWidth+4 {
-		return zeroTheme.lineStrong.Render("╰" + strings.Repeat("─", width-2) + "╯")
+		return m.postureBoxRule("╰"+strings.Repeat("─", width-2)+"╯", 0, width)
 	}
+	// The rule is painted in two column-accurate segments around the model
+	// label, so the gradient continues through the gap rather than restarting.
 	rule := strings.Repeat("─", width-metaWidth-4)
-	return zeroTheme.lineStrong.Render("╰"+rule+" ") + meta + zeroTheme.lineStrong.Render(" ╯")
+	return m.postureBoxRule("╰"+rule+" ", 0, width) + meta + m.postureBoxRule(" ╯", width-2, width)
 }
 
 // statusLine renders the bottom readout as ` │ `-separated groups: the run-state
