@@ -5362,8 +5362,18 @@ func (m *model) cancelRun() {
 	// its ticking clock and its "live" mark in MODELS forever — "Run cancelled."
 	// in the transcript beside agents that look like they are still working. An
 	// orchestrate task left orchestrateRunning does the same to the PLAN bar.
-	m.specialists.cancelRunning(m.now())
-	m.orchestrate.cancelRunning(m.now())
+	//
+	// EXCEPT WHEN A BACKGROUND PLAN IS STILL LIVE, and that exemption is the
+	// same one beginRun makes a few lines above: a background plan outlives the
+	// run that launched it BY DESIGN, so cancelling this turn does not cancel
+	// it. Marking its tasks cancelled here was the mirror image of the defect
+	// the background-status tests exist to prevent — work still spending tokens
+	// and writing files, reported to the user as stopped. The children of a
+	// FOREGROUND run do die with the run context, so they are still settled.
+	if !m.planProgress.BackgroundPlanLive() {
+		m.specialists.cancelRunning(m.now())
+		m.orchestrate.cancelRunning(m.now())
+	}
 	m.pendingPermission = nil
 	m.pendingAskUser = nil
 	// The interim block renders streamingText live; a cancelled run's partial
