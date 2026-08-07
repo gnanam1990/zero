@@ -300,6 +300,9 @@ func mergeConfig(dst *FileConfig, src FileConfig) {
 	// User config only, like the pins and guidance: a size floor decides which
 	// models do the work and therefore what a plan costs, so a cloned repo must
 	// not set it. A positive value overrides; 0 or negative is "unset".
+	if src.Profiles.PlanModels.TopModels > 0 {
+		dst.Profiles.PlanModels.TopModels = src.Profiles.PlanModels.TopModels
+	}
 	if src.Profiles.PlanModels.MinSize > 0 {
 		dst.Profiles.PlanModels.MinSize = src.Profiles.PlanModels.MinSize
 	}

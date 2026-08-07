@@ -365,6 +365,7 @@ func planModelPreferences(cfg config.PlanModelsConfig) specialist.ModelPreferenc
 		RouterGuidance: cfg.RouterGuidance,
 		AutoAssign:     cfg.AutoAssign,
 		MinSize:        cfg.MinSize,
+		TopModels:      cfg.TopModels,
 	}
 }
 

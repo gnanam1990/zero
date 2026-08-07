@@ -394,6 +394,14 @@ type PlanModelsConfig struct {
 	// would leave a provider with no models at all, it is ignored: a plan running
 	// on a small model beats a plan that cannot run. 0 means no floor.
 	MinSize float64 `json:"minSize,omitempty"`
+	// TopModels caps how many of the most capable discovered models a plan may
+	// route to, after exclusions and the size floor. A provider listing twenty
+	// models otherwise puts its SMALLEST on the cheap tier and hands the router
+	// twenty candidates; keeping the best ten narrows both to models worth a
+	// sub-agent. Unset (0) is the built-in default of 10; raise it to widen the
+	// field. A pin outside the list still applies — pins are validated against
+	// what the provider serves, not against this shortlist.
+	TopModels int `json:"topModels,omitempty"`
 }
 
 type ProfilesConfig struct {
