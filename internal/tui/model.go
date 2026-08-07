@@ -2746,6 +2746,12 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.fromKey != "" && msg.toKey != "" && msg.fromKey != msg.toKey {
 			m.specialists.reconcileSessionID(msg.fromKey, msg.toKey)
 		}
+		// A REBIND IS THE BACKGROUND SIGNAL. backgroundSpawnRebind emits this
+		// only for a Task whose result carried background=true, so reaching here
+		// is proof the child outlives this run.
+		if msg.toKey != "" {
+			m.specialists.markBackground(msg.toKey)
+		}
 		return m, nil
 	case specialistCompleteMsg:
 		if msg.runID != m.activeRunID {
@@ -2804,6 +2810,11 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.orchestrate.markStarted(msg.taskID, msg.summary, msg.cardKey, msg.model, m.now())
 		m.specialists.start(msg.taskID, msg.summary, msg.cardKey, m.now())
+		if msg.background {
+			// A background plan's tasks outlive this run, so cancelling the turn
+			// must not settle them — see specialistTracker.cancelRunning.
+			m.specialists.markBackground(msg.cardKey)
+		}
 		m.specialists.setModel(msg.cardKey, msg.model)
 		return m, nil
 	case planPreflightMsg:
@@ -5370,8 +5381,15 @@ func (m *model) cancelRun() {
 	// the background-status tests exist to prevent — work still spending tokens
 	// and writing files, reported to the user as stopped. The children of a
 	// FOREGROUND run do die with the run context, so they are still settled.
+	// SPECIALISTS SETTLE THEMSELVES: cancelRunning skips the rows marked
+	// background and settles the rest, because this tracker holds foreground and
+	// background children TOGETHER. Gating the whole call on BackgroundPlanLive
+	// — as the first version did — left every foreground sub-agent spinning
+	// forever whenever any background plan happened to be live.
+	m.specialists.cancelRunning(m.now())
+	// The orchestrate panel holds ONE plan at a time, so the panel is background
+	// or it is not; there is no mixed case to discriminate here.
 	if !m.planProgress.BackgroundPlanLive() {
-		m.specialists.cancelRunning(m.now())
 		m.orchestrate.cancelRunning(m.now())
 	}
 	m.pendingPermission = nil
