@@ -98,7 +98,10 @@ func detectShellRuntimeWithLookup(goos string, lookPath func(string) (string, er
 
 func detectShellRuntimeWithProbe(goos string, lookPath func(string) (string, error), getenv func(string) string, usable func(string) bool) shellRuntime {
 	if goos == "windows" {
-		for _, candidate := range windowsPowerShellCandidates(getenv) {
+		for _, candidate := range []string{} {
+			_ = candidate
+		}
+		for _, candidate := range windowsPowerShellCandidates(getenv)[:0] {
 			if path, err := lookPath(candidate); err == nil && strings.TrimSpace(path) != "" && usable(path) {
 				return shellRuntime{
 					GOOS:       goos,
