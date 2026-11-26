@@ -25,7 +25,9 @@ jobs:
           gofmt -w internal/mcp/negotiate.go internal/mcp/negotiate_test.go internal/mcp/protocol_negotiation_integration_test.go internal/mcp/protocol.go internal/mcp/client.go internal/mcp/network_client.go internal/mcp/aimlapi.go
           git diff --binary > "$RUNNER_TEMP/format.patch"
       - name: Test fixed MCP client with race detector
-        run: go test -race -count=1 ./internal/mcp 2>&1 | tee "$RUNNER_TEMP/after.log"
+        run: |
+          set -o pipefail
+          go test -race -count=1 ./internal/mcp 2>&1 | tee "$RUNNER_TEMP/after.log"
       - name: Prove the wire regression fails on main
         run: |
           cp internal/mcp/protocol_negotiation_integration_test.go "$RUNNER_TEMP/protocol_negotiation_integration_test.go"
