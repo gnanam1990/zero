@@ -42,6 +42,32 @@ jobs:
           if [ "$result" -eq 0 ]; then echo 'Regression unexpectedly passed on main'; exit 1; fi
           grep -q -- '--- FAIL: TestHTTPProtocolNegotiationAfterVersionRejection' "$RUNNER_TEMP/before.log"
           if grep -q -- 'build failed' "$RUNNER_TEMP/before.log"; then exit 1; fi
+      - name: Verify the reported gh preview regression
+        run: |
+          git fetch --no-tags https://github.com/Twigpine/zero.git f78520eaa452f8d7971e5409f5c08c3cea721601
+          git worktree add --detach "$RUNNER_TEMP/gh-review" f78520eaa452f8d7971e5409f5c08c3cea721601
+          cat > "$RUNNER_TEMP/gh-review/internal/sandbox/review_preview_test.go" <<'GO'
+          package sandbox
+          import "testing"
+          func TestReviewGHPreviewValueKeepsNetwork(t *testing.T) {
+              for _, script := range []string{"gh api /user --preview --help", "if %ERRORLEVEL% == 0 gh api /user --preview --help"} {
+                  risk := classifyCommand(script)
+                  if !HasRiskCategory(risk, "network") { t.Errorf("%q: missing network category: %v", script, risk.Categories) }
+              }
+              if HasRiskCategory(classifyCommand("gh api --help"), "network") { t.Error("genuine help must stay local") }
+          }
+          GO
+          cd "$RUNNER_TEMP/gh-review"
+          set +e
+          go test -count=1 ./internal/sandbox -run '^TestReviewGHPreviewValueKeepsNetwork$' > "$RUNNER_TEMP/gh-before.log" 2>&1
+          result=$?
+          set -e
+          cat "$RUNNER_TEMP/gh-before.log"
+          if [ "$result" -eq 0 ]; then echo 'Review finding did not reproduce'; exit 1; fi
+          grep -q -- 'missing network category' "$RUNNER_TEMP/gh-before.log"
+          sed -i '/"--pattern":/a\	"--preview": true,' internal/sandbox/analyzer.go
+          go test -count=1 ./internal/sandbox -run '^TestReviewGHPreviewValueKeepsNetwork$' > "$RUNNER_TEMP/gh-after.log" 2>&1
+          cat "$RUNNER_TEMP/gh-after.log"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -50,3 +76,5 @@ jobs:
             ${{ runner.temp }}/format.patch
             ${{ runner.temp }}/after.log
             ${{ runner.temp }}/before.log
+            ${{ runner.temp }}/gh-before.log
+            ${{ runner.temp }}/gh-after.log
