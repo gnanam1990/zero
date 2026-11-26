@@ -105,3 +105,14 @@ func TestRPCErrorDataIsPreservedAndScrubbed(t *testing.T) {
 		t.Fatalf("RPC error data was not safely retained: %v", scrubbed.Error)
 	}
 }
+
+func TestHTTPVersionRejectionRequiresMatchingRPCResponse(t *testing.T) {
+	for _, id := range []int{1, 99} {
+		response := fakeHTTPResponse(nil, 400, fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"error":{"code":-32602,"message":"Invalid params","data":"Unsupported protocol version; supported: 2025-06-18"}}`, id))
+		err := httpRPCStatusError(Server{Name: "versions", Type: ServerTypeHTTP}, response, rpcMessage{ID: 1, Method: "initialize"})
+		var rpc *rpcError
+		if got := errors.As(err, &rpc); got != (id == 1) {
+			t.Fatalf("response id %d: retryable RPC error = %v (%v)", id, got, err)
+		}
+	}
+}

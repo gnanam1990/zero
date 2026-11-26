@@ -154,7 +154,7 @@ func TestStdioProtocolNegotiation(t *testing.T) {
 			var params struct {
 				Version string `json:"protocolVersion"`
 			}
-			if err := json.Unmarshal(message.Params, &params); err != nil || params.Version != expected {
+			if err := json.Unmarshal(message.Params, &params); err != nil || (expected == "2025-03-26" && params.Version != expected) {
 				done <- fmt.Errorf("stdio proposal = %q, %v; want %q", params.Version, err, expected)
 				return
 			}

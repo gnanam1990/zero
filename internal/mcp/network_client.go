@@ -661,9 +661,10 @@ func httpRPCStatusError(server Server, response *http.Response, request rpcMessa
 	// bytes for the ordinary status diagnostic if this is not a JSON-RPC error.
 	response.Body = io.NopCloser(bytes.NewReader(body))
 	var rejected rpcMessage
+	expectedID, validID := rpcMessageID(request.ID)
 	if readErr == nil && len(body) <= maxErrorBytes && json.Unmarshal(body, &rejected) == nil &&
 		rejected.JSONRPC == "2.0" && !rejected.isRequestOrNotification() && rejected.Error != nil &&
-		(rejected.ID == nil || rpcIDMatches(rejected.ID, request.ID)) {
+		(rejected.ID == nil || (validID && rpcIDMatches(rejected.ID, expectedID))) {
 		return fmt.Errorf("MCP %s server %s returned HTTP %d: %w", server.Type, server.Name, response.StatusCode, rejected.Error)
 	}
 	return httpStatusError(server, response)
