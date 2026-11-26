@@ -1,0 +1,93 @@
+name: Focused PR re-review evidence
+
+on:
+  push:
+    branches: [ci/other-pr-review-20261126]
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        pr: [987, 988]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Fetch exact reviewed head
+        shell: bash
+        env:
+          PR: ${{ matrix.pr }}
+        run: |
+          if [ "$PR" = 987 ]; then head=1eda99d57755579690e30d1f2e134c638a193ba0; else head=90e1ed80dda391ed6c9109c45c39d6c2476615f3; fi
+          git fetch --no-tags https://github.com/Twigpine/zero.git "$head"
+          git checkout --detach "$head"
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run focused regression tests
+        shell: bash
+        env:
+          PR: ${{ matrix.pr }}
+        run: |
+          set -o pipefail
+          if [ "$PR" = 987 ]; then
+            go test -race -count=2 ./internal/execution -run 'TestRunCommand|TestCommandTree|TestPrepareCommandTree' 2>&1 | tee after.log
+          else
+            go test -race -count=2 ./internal/tools -run '^TestWriteFileTool(ExplicitEncodingIntent|EncodingPreservation|FormatterEditsKeepEncoding)' 2>&1 | tee after.log
+          fi
+      - name: Prove the original observation regression is caught
+        if: matrix.pr == 988
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('internal/tools/write_file.go')
+          s=p.read_text()
+          s=s.replace('\tvar encoding writeFileEncoding\n', '\tvar encoding writeFileEncoding\n\tmodelEquivalentContent := content\n', 1)
+          s=s.replace('\n\tmodelEquivalentContent := content\n\n\tif dir :=', '\n\n\tif dir :=', 1)
+          p.write_text(s)
+          PY
+          set +e
+          go test -count=1 ./internal/tools -run '^TestWriteFileToolEncodingPreservationKeepsWholeFileObservation$' > before.log 2>&1
+          result=$?
+          set -e
+          cat before.log
+          if [ "$result" -eq 0 ]; then echo 'Original tracker regression was not caught'; exit 1; fi
+          grep -q -- '--- FAIL: TestWriteFileToolEncodingPreservationKeepsWholeFileObservation' before.log
+          if grep -q -- 'build failed' before.log; then exit 1; fi
+      - name: Prove the original Windows job-close regression is caught
+        if: matrix.pr == 987 && matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('internal/execution/command_tree_windows.go')
+          s=p.read_text()
+          marker='\tif command.SysProcAttr == nil {'
+          mutation='\tinfo := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}\n\tinfo.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE\n\tif _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil { return nil, err }\n'
+          if marker not in s: raise SystemExit('Mutation target absent')
+          p.write_text(s.replace(marker, mutation+marker, 1))
+          PY
+          set +e
+          go test -count=1 ./internal/execution -run '^TestRunCommandPreservesDetachedChildAfterSuccessfulExit$' > before.log 2>&1
+          result=$?
+          set -e
+          cat before.log
+          if [ "$result" -eq 0 ]; then echo 'Original detached-child regression was not caught'; exit 1; fi
+          grep -q -- 'successful RunCommand terminated detached child' before.log
+          if grep -q -- 'build failed' before.log; then exit 1; fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: review-${{ matrix.pr }}-${{ matrix.os }}
+          path: |
+            after.log
+            before.log
