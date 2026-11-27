@@ -1,0 +1,103 @@
+name: PR 941 rooted publication proof
+
+on:
+  push:
+    branches: [ci/pr-941-containment-proof]
+
+permissions:
+  contents: read
+
+jobs:
+  containment:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        revision: [base, head]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Fetch captured revision
+        shell: bash
+        env:
+          REVISION: ${{ matrix.revision }}
+        run: |
+          if [ "$REVISION" = head ]; then ref=6f486da7362966e9b6ad8b3d4cc1a51685adeb04; else ref=5aa54fe1d2b419c9bbef73605a77919c9007cf7b; fi
+          git fetch --no-tags https://github.com/Twigpine/zero.git "$ref"
+          git checkout --detach "$ref"
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Insert a scheduling hook and the same scoped-write fixture
+        shell: bash
+        env:
+          REVISION: ${{ matrix.revision }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path('internal/tools/file_commit.go')
+          s=p.read_text()
+          if os.environ['REVISION']=='head':
+              old='\t\treturn publishFileContents(absolutePath, content)'
+              new='\t\tif reviewPublicationSwap != nil { reviewPublicationSwap() }\n'+old
+          else:
+              old='\t\tif err := file.Truncate(0); err != nil {'
+              new='\t\tif reviewPublicationSwap != nil { reviewPublicationSwap() }\n'+old
+          if s.count(old)!=1: raise SystemExit('Publication boundary was not unique')
+          p.write_text(s.replace(old,new,1))
+          PY
+          cat > internal/tools/review_publication_scope_test.go <<'GO'
+          package tools
+          import (
+              "context"
+              "os"
+              "path/filepath"
+              "testing"
+          )
+          var reviewPublicationSwap func()
+          func TestReviewPublicationKeepsOpenedWriteScope(t *testing.T) {
+              t.Setenv("ZERO_FORMAT_ON_WRITE", "")
+              workspace, outside := t.TempDir(), t.TempDir()
+              parent := filepath.Join(workspace, "sub")
+              if err:=os.Mkdir(parent,0700); err!=nil { t.Fatal(err) }
+              if err:=os.WriteFile(filepath.Join(parent,"note.txt"),[]byte("inside"),0600); err!=nil {t.Fatal(err)}
+              external:=filepath.Join(outside,"note.txt")
+              if err:=os.WriteFile(external,[]byte("outside"),0600); err!=nil {t.Fatal(err)}
+              reached:=false
+              reviewPublicationSwap=func(){
+                  if reached { return }; reached=true
+                  if err:=os.Rename(parent,filepath.Join(workspace,"held")); err!=nil {t.Fatal(err)}
+                  if err:=os.Symlink(outside,parent); err!=nil {t.Fatal(err)}
+              }
+              defer func(){reviewPublicationSwap=nil}()
+              result:=NewScopedWriteFileTool(workspace,nil).Run(context.Background(),map[string]any{"path":"sub/note.txt","content":"replacement","overwrite":true})
+              if !reached {t.Fatal("Last publication boundary was not reached")}
+              got,err:=os.ReadFile(external); if err!=nil {t.Fatal(err)}
+              if string(got)!="outside" {t.Fatalf("outside target overwritten after final directory check: %q; tool result: %+v",got,result)}
+          }
+          GO
+      - name: Compare the actual outside-file outcome
+        shell: bash
+        env:
+          REVISION: ${{ matrix.revision }}
+        run: |
+          set +e
+          go test -count=1 ./internal/tools -run '^TestReviewPublicationKeepsOpenedWriteScope$' > proof.log 2>&1
+          result=$?
+          set -e
+          cat proof.log
+          if [ "$REVISION" = base ]; then test "$result" -eq 0; else
+            test "$result" -ne 0
+            grep -q 'outside target overwritten after final directory check' proof.log
+            if grep -q 'build failed' proof.log; then exit 1; fi
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: containment-${{ matrix.revision }}-${{ matrix.os }}
+          path: proof.log
