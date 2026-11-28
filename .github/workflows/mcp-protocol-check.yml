@@ -57,6 +57,21 @@ jobs:
           grep -q -- 'escaped_supported_list' "$RUNNER_TEMP/review-before.log"
           grep -q -- 'ignore_unsupported_list' "$RUNNER_TEMP/review-before.log"
           if grep -q -- 'build failed' "$RUNNER_TEMP/review-before.log"; then exit 1; fi
+      - name: Prove conjunction lists fail before the latest fix
+        run: |
+          git fetch --no-tags https://github.com/gnanam1990/zero.git 4a3cabd628261e5621c191dc5850995062311ae4
+          git worktree add --detach "$RUNNER_TEMP/zero-before-conjunction" 4a3cabd628261e5621c191dc5850995062311ae4
+          cp internal/mcp/negotiate_test.go "$RUNNER_TEMP/zero-before-conjunction/internal/mcp/"
+          cd "$RUNNER_TEMP/zero-before-conjunction"
+          set +e
+          go test -count=1 ./internal/mcp -run '^TestNegotiateProtocol$' > "$RUNNER_TEMP/conjunction-before.log" 2>&1
+          result=$?
+          set -e
+          cat "$RUNNER_TEMP/conjunction-before.log"
+          if [ "$result" -eq 0 ]; then echo 'Conjunction regressions unexpectedly passed'; exit 1; fi
+          grep -q -- 'FAIL: TestNegotiateProtocol/conjunction_separated_supported_list' "$RUNNER_TEMP/conjunction-before.log"
+          grep -q -- 'FAIL: TestNegotiateProtocol/or_separated_supported_list' "$RUNNER_TEMP/conjunction-before.log"
+          if grep -q -- 'build failed' "$RUNNER_TEMP/conjunction-before.log"; then exit 1; fi
       - name: Verify the reported gh preview regression
         run: |
           git fetch --no-tags https://github.com/Twigpine/zero.git f78520eaa452f8d7971e5409f5c08c3cea721601
@@ -92,5 +107,6 @@ jobs:
             ${{ runner.temp }}/after.log
             ${{ runner.temp }}/before.log
             ${{ runner.temp }}/review-before.log
+            ${{ runner.temp }}/conjunction-before.log
             ${{ runner.temp }}/gh-before.log
             ${{ runner.temp }}/gh-after.log
